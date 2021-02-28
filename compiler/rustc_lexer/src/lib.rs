@@ -165,7 +165,7 @@ pub enum LiteralKind {
     /// `br"abc"`, `br#"abc"#`, `br####"ab"###"c"####`, `br#"a`
     RawByteStr { n_hashes: u16, err: Option<RawStrError> },
     /// `f"foo{`, `} bar {`, `} quux"`, or `f"foo"`
-    FStr { start: FStrDelimiter, end: FStrDelimiter, terminated: bool },
+    FStr { start: FStrDelimiter, end: Option<FStrDelimiter> },
 }
 
 /// Error produced validating a raw string. Represents cases like:
@@ -372,19 +372,19 @@ impl Cursor<'_> {
                 _ => self.ident(),
             },
 
-            // f-string or identifier.
+            // Format string or identifier.
             'f' => {
                 match self.first() {
                     '\"' => {
                         self.bump();
 
-                        // TODO: Actually parse correctly
-                        let terminated = self.double_quoted_string();
+                        // Leave up to consumers to split up this f-string further, when unescaping.
+                        let end = self.f_string();
+                        let kind = FStr { start: FStrDelimiter::Quote, end: FStrDelimiter::Quote };
                         let suffix_start = self.len_consumed();
                         if terminated {
                             self.eat_literal_suffix();
                         }
-                        let kind = FStr { start: FStrDelimiter::Quote, end: FStrDelimiter::Quote, terminated };
                         Literal { kind, suffix_start }
                     }
                     _ => self.ident(),
@@ -684,6 +684,10 @@ impl Cursor<'_> {
     /// if string is terminated.
     fn double_quoted_string(&mut self) -> bool {
         debug_assert!(self.prev() == '"');
+        self.double_quoted_string_common()
+    }
+
+    fn double_quoted_string_common(&mut self) -> bool {
         while let Some(c) = self.bump() {
             match c {
                 '"' => {
@@ -776,6 +780,12 @@ impl Cursor<'_> {
                 max_hashes = n_end_hashes;
             }
         }
+    }
+
+    /// Eats an f-string. Returns true if it was terminated.
+    fn f_string(&mut self) -> bool {
+        debug_assert!(self.prev() == '"' || self.prev() == '}');
+        self.double_quoted_string_common()
     }
 
     fn eat_decimal_digits(&mut self) -> bool {

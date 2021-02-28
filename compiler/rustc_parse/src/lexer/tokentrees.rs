@@ -1,6 +1,6 @@
 use super::{StringReader, UnmatchedBrace};
 
-use rustc_ast::token::{self, DelimToken, Token};
+use rustc_ast::{token::{self, DelimToken, Token}, tokenstream::TokenStreamBuilder};
 use rustc_ast::tokenstream::{
     DelimSpan,
     Spacing::{self, *},
@@ -9,6 +9,7 @@ use rustc_ast::tokenstream::{
 use rustc_ast_pretty::pprust::token_to_string;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::PResult;
+use rustc_lexer::FStrDelimiter;
 use rustc_span::Span;
 
 impl<'a> StringReader<'a> {
@@ -256,6 +257,83 @@ impl<'a> TokenTreesReader<'a> {
 
                 err.span_label(self.token.span, "unexpected closing delimiter");
                 Err(err)
+            }
+            token::FStr(start_delimiter, end_delimiter) => {
+                assert_eq!(start_delimiter, FStrDelimiter::Quote);
+                assert_eq!(end_delimiter, FStrDelimiter::Quote);
+
+                let start_delimiter_len = start_delimiter.display(true).len();
+                let end_delimiter_len = end_delimiter.display(true).len();
+
+                let token_span_data = self.token.span.data();
+                let delim_span = DelimSpan {
+                    open: token_span_data.with_hi(token_span_data.lo + BytePos(start_delimiter_len)),
+                    close: token_span_data.with_lo(token_span_data.hi - BytePos(end_delimiter_len))
+                };
+
+                let mut token_stream = TokenStreamBuilder::default();
+
+                let full_f_string = token_to_string(&self.token);
+                let f_str = full_f_string[start_delimiter_len..full_f_string.len() - end_delimiter_len];
+                let mut f_str_chars = token_str.char_indices().peekable();
+
+                let mut buffer_span_lo = token_span_data.lo;
+                let mut buffer_start_delimiter = token::FStrDelimiter::Quote;
+                let mut buffer = String::new();
+
+                while let Some((i1, c1)) = f_str_chars.next() {
+                    let ic2 = f_str_chars.peek();
+                    match (c1, ic2.map(|ic| ic.1)) {
+                        ('{', Some('{')) => {} // Escaped
+                        ('{', _) => {
+                            // Parse nested f-string
+                            token_stream.push((TokenTree::Token(Token {
+                                kind: token::FStr(buffer_start_delimiter, token::FStrDelimiter::Brace),
+                                span: token_span_data.with_lo(buffer_span_lo).with_hi(BytePos(i1))
+                            }), Alone));
+                            buffer_start_delimiter = token::FStrDelimiter::Brace;
+
+                            // TODO
+                            {
+                                let nested_string_reader = StringReader {
+                                    sess: self.sess,
+                                    start_pos: BytePos(i1),
+                                    pos: BytePos(i1),
+                                    end_src_index: f_str.len(),
+                                    src: f_str,
+                                    override_span: None,
+                                    allow_shebang: false,
+                                };
+                                let nested_token_trees_reader = TokenTreesReader {
+                                    string_reader: nested_string_reader,
+                                    token: Token::dummy(),
+                                    open_braces: Vec::new(),
+                                    unmatched_braces: Vec::new(),
+                                    matching_delim_spans: Vec::new(),
+                                    last_unclosed_found_span: None,
+                                    last_delim_empty_block_spans: FxHashMap::default(),
+                                    matching_block_spans: Vec::new(),
+                                };
+                                nested_token_trees_reader.
+                            }
+
+                            buffer_span_lo = expr_hi;
+                        }
+                        _ => {}
+                    }
+                    buffer.push(c1);
+                }
+
+                if buffer.len() > 0 {
+                    // TODO: Check `Alone`
+                    token_stream.push((TokenTree::Token(Token {
+                        kind: token::FStr(buffer_start_delimiter, token::FStrDelimiter::Quote),
+                        span: token_span_data.with_lo(buffer_span_lo)
+                    }), Alone));
+                }
+
+                // TODO: Check `Alone`
+                Ok((TokenTree::Delimited(delim_span, DelimToken::NoDelim, token_stream.build()), Alone))
             }
             _ => {
                 let tt = TokenTree::Token(self.token.take());
