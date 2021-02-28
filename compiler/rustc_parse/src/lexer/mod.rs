@@ -31,7 +31,7 @@ crate fn parse_token_trees<'a>(
     start_pos: BytePos,
     override_span: Option<Span>,
 ) -> (PResult<'a, TokenStream>, Vec<UnmatchedBrace>) {
-    StringReader { sess, start_pos, pos: start_pos, end_src_index: src.len(), src, override_span }
+    StringReader { sess, start_pos, pos: start_pos, end_src_index: src.len(), src, override_span, allow_shebang: true }
         .into_token_trees()
 }
 
@@ -46,6 +46,7 @@ struct StringReader<'a> {
     /// Source text to tokenize.
     src: &'a str,
     override_span: Option<Span>,
+    allow_shebang: bool,
 }
 
 impl<'a> StringReader<'a> {
@@ -57,14 +58,16 @@ impl<'a> StringReader<'a> {
     fn next_token(&mut self) -> (Spacing, Token) {
         let mut spacing = Spacing::Joint;
 
-        // Skip `#!` at the start of the file
-        let start_src_index = self.src_index(self.pos);
-        let text: &str = &self.src[start_src_index..self.end_src_index];
-        let is_beginning_of_file = self.pos == self.start_pos;
-        if is_beginning_of_file {
-            if let Some(shebang_len) = rustc_lexer::strip_shebang(text) {
-                self.pos = self.pos + BytePos::from_usize(shebang_len);
-                spacing = Spacing::Alone;
+        if self.allow_shebang {
+            // Skip `#!` at the start of the file
+            let start_src_index = self.src_index(self.pos);
+            let text: &str = &self.src[start_src_index..self.end_src_index];
+            let is_beginning_of_file = self.pos == self.start_pos;
+            if is_beginning_of_file {
+                if let Some(shebang_len) = rustc_lexer::strip_shebang(text) {
+                    self.pos = self.pos + BytePos::from_usize(shebang_len);
+                    spacing = Spacing::Alone;
+                }
             }
         }
 
@@ -379,8 +382,8 @@ impl<'a> StringReader<'a> {
                 let n = u32::from(n_hashes);
                 (token::ByteStrRaw(n_hashes), Mode::RawByteStr, 3 + n, 1 + n) // br##" "##
             }
-            rustc_lexer::LiteralKind::FStr { start: start_delimiter, end: end_delimiter, terminated } => {
-                if !terminated {
+            rustc_lexer::LiteralKind::FStr { start: start_delimiter, end: end_delimiter } => {
+                if end_delimiter.is_none() {
                     let lo = if start_delimiter == rustc_lexer::FStrDelimiter::Quote { start + BytePos(1) } else { start };
                     self.sess
                         .span_diagnostic
@@ -396,7 +399,7 @@ impl<'a> StringReader<'a> {
                     rustc_lexer::FStrDelimiter::Quote => 2,
                     rustc_lexer::FStrDelimiter::Brace => 1
                 };
-                (token::FStr(translate_f_str_delimiter(start_delimiter), translate_f_str_delimiter(end_delimiter)), Mode::FStr, prefix_len, 1)
+                (token::FStr(translate_f_str_delimiter(start_delimiter), translate_f_str_delimiter(end_delimiter.unwrap())), Mode::FStr, prefix_len, 1)
             }
             rustc_lexer::LiteralKind::Int { base, empty_int } => {
                 return if empty_int {
