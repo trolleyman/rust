@@ -1,16 +1,15 @@
 use super::{StringReader, UnmatchedBrace};
 
-use rustc_ast::{token::{self, DelimToken, Token}, tokenstream::TokenStreamBuilder};
-use rustc_ast::tokenstream::{
-    DelimSpan,
-    Spacing::{self, *},
-    TokenStream, TokenTree, TreeAndSpacing,
+use rustc_ast::tokenstream::Spacing::{*, self};
+use rustc_ast::tokenstream::{TokenStream, TokenTree, TreeAndSpacing};
+use rustc_ast::{
+    token::{self, DelimToken, Token},
+    tokenstream::DelimSpan,
 };
 use rustc_ast_pretty::pprust::token_to_string;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_errors::PResult;
-use rustc_lexer::FStrDelimiter;
-use rustc_span::Span;
+use rustc_span::{BytePos, Pos, Span};
 
 impl<'a> StringReader<'a> {
     pub(super) fn into_token_trees(self) -> (PResult<'a, TokenStream>, Vec<UnmatchedBrace>) {
@@ -60,11 +59,13 @@ impl<'a> TokenTreesReader<'a> {
         Ok(buf.into_token_stream())
     }
 
-    // Parse a stream of tokens into a list of `TokenTree`s, up to a `CloseDelim`.
-    fn parse_token_trees_until_close_delim(&mut self) -> TokenStream {
+    fn parse_token_trees_until<F>(&mut self, predicate: F) -> TokenStream
+    where
+        F: Fn(&Token) -> bool,
+    {
         let mut buf = TokenStreamBuilder::default();
         loop {
-            if let token::CloseDelim(..) = self.token.kind {
+            if predicate(&self.token) {
                 return buf.into_token_stream();
             }
 
@@ -76,6 +77,33 @@ impl<'a> TokenTreesReader<'a> {
                 }
             }
         }
+    }
+
+    // Parse a stream of tokens into a list of `TokenTree`s, up to a `CloseDelim`.
+    fn parse_token_trees_until_close_delim(&mut self) -> TokenStream {
+        self.parse_token_trees_until(|t| matches!(t.kind, token::CloseDelim(..)))
+    }
+
+    fn expect_start_f_string_delimiter(
+        &self,
+        span: Span,
+        expected: token::FStrDelimiter,
+        got: token::FStrDelimiter,
+    ) -> PResult<'a, ()> {
+        if expected == got {
+            return Ok(());
+        }
+        let msg = format!(
+            "invalid f-string delimiter: expected `{}`, got `{}`",
+            expected.display(true),
+            got.display(true)
+        );
+        let mut err = self.string_reader.sess.span_diagnostic.struct_span_err(span, &msg);
+        err.span_label(
+            span.with_hi(span.lo() + BytePos::from_usize(got.display(true).len())),
+            format!("this delimiter should be `{}`", expected.display(true)),
+        );
+        Err(err)
     }
 
     fn parse_token_tree(&mut self) -> PResult<'a, TreeAndSpacing> {
@@ -258,82 +286,90 @@ impl<'a> TokenTreesReader<'a> {
                 err.span_label(self.token.span, "unexpected closing delimiter");
                 Err(err)
             }
-            token::FStr(start_delimiter, end_delimiter) => {
-                assert_eq!(start_delimiter, FStrDelimiter::Quote);
-                assert_eq!(end_delimiter, FStrDelimiter::Quote);
-
-                let start_delimiter_len = start_delimiter.display(true).len();
-                let end_delimiter_len = end_delimiter.display(true).len();
-
-                let token_span_data = self.token.span.data();
-                let delim_span = DelimSpan {
-                    open: token_span_data.with_hi(token_span_data.lo + BytePos(start_delimiter_len)),
-                    close: token_span_data.with_lo(token_span_data.hi - BytePos(end_delimiter_len))
+            token::Literal(token::Lit {
+                kind: token::LitKind::FStr(..),
+                ..
+            }) => {
+                let mut expected_start_delimiter = token::FStrDelimiter::Quote;
+                let span_lo = self.token.span.lo();
+                let mut buf = TokenStreamBuilder::default();
+                let span_hi = loop {
+                    match self.token.kind {
+                        token::Literal(token::Lit {
+                            kind: token::LitKind::FStr(start_delimiter, token::FStrDelimiter::Quote),
+                            ..
+                        }) => {
+                            self.expect_start_f_string_delimiter(
+                                self.token.span,
+                                expected_start_delimiter,
+                                start_delimiter,
+                            )?;
+                            buf.push((TokenTree::Token(self.token.clone()), Alone));
+                            break self.token.span.hi();
+                        }
+                        token::Literal(token::Lit {
+                            kind: token::LitKind::FStr(start_delimiter, token::FStrDelimiter::Brace),
+                            ..
+                        }) => {
+                            self.expect_start_f_string_delimiter(
+                                self.token.span,
+                                expected_start_delimiter,
+                                start_delimiter,
+                            )?;
+                            buf.push((TokenTree::Token(self.token.clone()), Alone));
+                            let delim_open = Span::with_root_ctxt(
+                                self.token.span.hi() - BytePos::from_usize(start_delimiter.display(false).len()),
+                                self.token.span.hi(),
+                            );
+                            self.bump();
+                            let inner_stream = self.parse_token_trees_until(|t| {
+                                matches!(
+                                    t.kind,
+                                    token::Literal(token::Lit {
+                                        kind: token::LitKind::FStr(..),
+                                        ..
+                                    })
+                                )
+                            });
+                            let delim_close = Span::with_root_ctxt(
+                                self.token.span.lo(),
+                                self.token.span.lo() + BytePos::from_usize(token::FStrDelimiter::Brace.display(true).len()),
+                            );
+                            // TODO: Should this be DelimToken::Brace here, or DelimToken::NoDelim?
+                            //       Technially there are braces, but not sure if we should count them as part of the f-string itself
+                            buf.push((TokenTree::Delimited(DelimSpan::from_pair(delim_open, delim_close), DelimToken::Brace, inner_stream), Alone));
+                            expected_start_delimiter = token::FStrDelimiter::Brace;
+                        }
+                        _ => {
+                            let token_str = token_to_string(&self.token);
+                            let msg = format!("expected f-string segment, got `{}`", token_str);
+                            let err = self
+                                .string_reader
+                                .sess
+                                .span_diagnostic
+                                .struct_span_err(self.token.span, &msg);
+                            return Err(err);
+                        }
+                    }
                 };
 
-                let mut token_stream = TokenStreamBuilder::default();
-
-                let full_f_string = token_to_string(&self.token);
-                let f_str = full_f_string[start_delimiter_len..full_f_string.len() - end_delimiter_len];
-                let mut f_str_chars = token_str.char_indices().peekable();
-
-                let mut buffer_span_lo = token_span_data.lo;
-                let mut buffer_start_delimiter = token::FStrDelimiter::Quote;
-                let mut buffer = String::new();
-
-                while let Some((i1, c1)) = f_str_chars.next() {
-                    let ic2 = f_str_chars.peek();
-                    match (c1, ic2.map(|ic| ic.1)) {
-                        ('{', Some('{')) => {} // Escaped
-                        ('{', _) => {
-                            // Parse nested f-string
-                            token_stream.push((TokenTree::Token(Token {
-                                kind: token::FStr(buffer_start_delimiter, token::FStrDelimiter::Brace),
-                                span: token_span_data.with_lo(buffer_span_lo).with_hi(BytePos(i1))
-                            }), Alone));
-                            buffer_start_delimiter = token::FStrDelimiter::Brace;
-
-                            // TODO
-                            {
-                                let nested_string_reader = StringReader {
-                                    sess: self.sess,
-                                    start_pos: BytePos(i1),
-                                    pos: BytePos(i1),
-                                    end_src_index: f_str.len(),
-                                    src: f_str,
-                                    override_span: None,
-                                    allow_shebang: false,
-                                };
-                                let nested_token_trees_reader = TokenTreesReader {
-                                    string_reader: nested_string_reader,
-                                    token: Token::dummy(),
-                                    open_braces: Vec::new(),
-                                    unmatched_braces: Vec::new(),
-                                    matching_delim_spans: Vec::new(),
-                                    last_unclosed_found_span: None,
-                                    last_delim_empty_block_spans: FxHashMap::default(),
-                                    matching_block_spans: Vec::new(),
-                                };
-                                nested_token_trees_reader.
-                            }
-
-                            buffer_span_lo = expr_hi;
-                        }
-                        _ => {}
-                    }
-                    buffer.push(c1);
-                }
-
-                if buffer.len() > 0 {
-                    // TODO: Check `Alone`
-                    token_stream.push((TokenTree::Token(Token {
-                        kind: token::FStr(buffer_start_delimiter, token::FStrDelimiter::Quote),
-                        span: token_span_data.with_lo(buffer_span_lo)
-                    }), Alone));
-                }
-
+                let delim_open = Span::with_root_ctxt(
+                    span_lo,
+                    span_lo + BytePos::from_usize(token::FStrDelimiter::Quote.display(true).len()),
+                );
+                let delim_close = Span::with_root_ctxt(
+                    span_hi - BytePos::from_usize(token::FStrDelimiter::Quote.display(false).len()),
+                    span_hi,
+                );
                 // TODO: Check `Alone`
-                Ok((TokenTree::Delimited(delim_span, DelimToken::NoDelim, token_stream.build()), Alone))
+                Ok((
+                    TokenTree::Delimited(
+                        DelimSpan { open: delim_open, close: delim_close },
+                        DelimToken::NoDelim,
+                        buf.into_token_stream(),
+                    ),
+                    Alone,
+                ))
             }
             _ => {
                 let tt = TokenTree::Token(self.token.take());

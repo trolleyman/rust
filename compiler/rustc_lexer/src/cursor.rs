@@ -81,4 +81,15 @@ impl<'a> Cursor<'a> {
 
         Some(c)
     }
+
+    /// Moves the cursor along `n` characters.
+    ///
+    /// Returns the last character visited.
+    pub(crate) fn bump_n(&mut self, n: usize) -> Option<char> {
+        let mut result = None;
+        for _ in 0..n {
+            result = self.bump();
+        }
+        result
+    }
 }

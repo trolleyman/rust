@@ -66,8 +66,16 @@ impl FStrDelimiter {
         match (self, is_start) {
             (FStrDelimiter::Quote, true) => "f\"",
             (FStrDelimiter::Quote, false) => "\"",
-            (FStrDelimiter::Brace, true) => "{",
-            (FStrDelimiter::Brace, false) => "}",
+            (FStrDelimiter::Brace, true) => "}",
+            (FStrDelimiter::Brace, false) => "{",
+        }
+    }
+}
+impl From<rustc_lexer::FStrDelimiter> for FStrDelimiter {
+    fn from(delimiter: rustc_lexer::FStrDelimiter) -> Self {
+        match delimiter {
+            rustc_lexer::FStrDelimiter::Quote => FStrDelimiter::Quote,
+            rustc_lexer::FStrDelimiter::Brace => FStrDelimiter::Brace,
         }
     }
 }
@@ -83,7 +91,6 @@ pub enum LitKind {
     StrRaw(u16), // raw string delimited by `n` hash symbols
     ByteStr,
     ByteStrRaw(u16), // raw byte string delimited by `n` hash symbols
-    /// F-string, delimited at the start and end by the specified delimiters.
     FStr(FStrDelimiter, FStrDelimiter), // `Token` only, must never appear in AST
     Err,
 }

@@ -31,8 +31,17 @@ crate fn parse_token_trees<'a>(
     start_pos: BytePos,
     override_span: Option<Span>,
 ) -> (PResult<'a, TokenStream>, Vec<UnmatchedBrace>) {
-    StringReader { sess, start_pos, pos: start_pos, end_src_index: src.len(), src, override_span, allow_shebang: true }
-        .into_token_trees()
+    StringReader {
+        sess,
+        start_pos,
+        pos: start_pos,
+        end_src_index: src.len(),
+        src,
+        override_span,
+        brace_depth: 0,
+        open_f_strings: vec![],
+    }
+    .into_token_trees()
 }
 
 struct StringReader<'a> {
@@ -46,7 +55,9 @@ struct StringReader<'a> {
     /// Source text to tokenize.
     src: &'a str,
     override_span: Option<Span>,
-    allow_shebang: bool,
+    brace_depth: i32,
+    /// f-string depth stack
+    open_f_strings: Vec<i32>,
 }
 
 impl<'a> StringReader<'a> {
@@ -58,16 +69,14 @@ impl<'a> StringReader<'a> {
     fn next_token(&mut self) -> (Spacing, Token) {
         let mut spacing = Spacing::Joint;
 
-        if self.allow_shebang {
-            // Skip `#!` at the start of the file
-            let start_src_index = self.src_index(self.pos);
-            let text: &str = &self.src[start_src_index..self.end_src_index];
-            let is_beginning_of_file = self.pos == self.start_pos;
-            if is_beginning_of_file {
-                if let Some(shebang_len) = rustc_lexer::strip_shebang(text) {
-                    self.pos = self.pos + BytePos::from_usize(shebang_len);
-                    spacing = Spacing::Alone;
-                }
+        // Skip `#!` at the start of the file
+        let start_src_index = self.src_index(self.pos);
+        let text: &str = &self.src[start_src_index..self.end_src_index];
+        let is_beginning_of_file = self.pos == self.start_pos;
+        if is_beginning_of_file {
+            if let Some(shebang_len) = rustc_lexer::strip_shebang(text) {
+                self.pos = self.pos + BytePos::from_usize(shebang_len);
+                spacing = Spacing::Alone;
             }
         }
 
@@ -82,11 +91,14 @@ impl<'a> StringReader<'a> {
             }
 
             let token = rustc_lexer::first_token(text);
+            debug!(
+                "next_token: {:?}({:?})",
+                token.kind,
+                self.str_from_to(self.pos, self.pos + BytePos::from_usize(token.len))
+            );
 
             let start = self.pos;
             self.pos = self.pos + BytePos::from_usize(token.len);
-
-            debug!("next_token: {:?}({:?})", token.kind, self.str_from(start));
 
             match self.cook_lexer_token(token.kind, start) {
                 Some(kind) => {
@@ -133,7 +145,7 @@ impl<'a> StringReader<'a> {
     /// Turns simple `rustc_lexer::TokenKind` enum into a rich
     /// `librustc_ast::TokenKind`. This turns strings into interned
     /// symbols and runs additional validation.
-    fn cook_lexer_token(&self, token: rustc_lexer::TokenKind, start: BytePos) -> Option<TokenKind> {
+    fn cook_lexer_token(&mut self, token: rustc_lexer::TokenKind, start: BytePos) -> Option<TokenKind> {
         Some(match token {
             rustc_lexer::TokenKind::LineComment { doc_style } => {
                 // Skip non-doc comments
@@ -238,8 +250,48 @@ impl<'a> StringReader<'a> {
             rustc_lexer::TokenKind::Dot => token::Dot,
             rustc_lexer::TokenKind::OpenParen => token::OpenDelim(token::Paren),
             rustc_lexer::TokenKind::CloseParen => token::CloseDelim(token::Paren),
-            rustc_lexer::TokenKind::OpenBrace => token::OpenDelim(token::Brace),
-            rustc_lexer::TokenKind::CloseBrace => token::CloseDelim(token::Brace),
+            rustc_lexer::TokenKind::OpenBrace => {
+                self.brace_depth += 1;
+                token::OpenDelim(token::Brace)
+            }
+            rustc_lexer::TokenKind::CloseBrace => {
+                self.brace_depth -= 1;
+                if self.open_f_strings.len() > 0
+                    && self.brace_depth == self.open_f_strings[self.open_f_strings.len() - 1]
+                {
+                    let (index, end_delimiter) = rustc_lexer::strip_f_string_segment(
+                        rustc_lexer::FStrDelimiter::Brace,
+                        &self.src[self.src_index(self.pos - BytePos(1))..self.end_src_index],
+                    )
+                    .expect("unhandled unclosed delimiter"); // (lexer should never put us in this awkward position)
+                    self.pos = self.pos + BytePos::from_usize(index - 1);
+
+                    let prefix_len = rustc_lexer::FStrDelimiter::Brace.display(true).len() as u32;
+                    let postfix_len = end_delimiter.display(true).len() as u32;
+                    let content_start = start + BytePos(prefix_len);
+                    let content_end = self.pos - BytePos(postfix_len);
+                    let symbol = self.symbol_from_to(content_start, content_end);
+                    self.validate_literal_escape(
+                        Mode::FStr,
+                        content_start,
+                        content_end,
+                        prefix_len,
+                        postfix_len,
+                    );
+
+                    if end_delimiter == rustc_lexer::FStrDelimiter::Quote {
+                        self.open_f_strings.pop();
+                    }
+
+                    token::Literal(token::Lit {
+                        kind: token::FStr(token::FStrDelimiter::Brace, end_delimiter.into()),
+                        symbol,
+                        suffix: None,
+                    })
+                } else {
+                    token::CloseDelim(token::Brace)
+                }
+            }
             rustc_lexer::TokenKind::OpenBracket => token::OpenDelim(token::Bracket),
             rustc_lexer::TokenKind::CloseBracket => token::CloseDelim(token::Bracket),
             rustc_lexer::TokenKind::At => token::At,
@@ -309,12 +361,13 @@ impl<'a> StringReader<'a> {
     }
 
     fn cook_lexer_literal(
-        &self,
+        &mut self,
         start: BytePos,
         suffix_start: BytePos,
         kind: rustc_lexer::LiteralKind,
     ) -> (token::LitKind, Symbol) {
         // prefix means `"` or `br"` or `r###"`, ...
+        // postfix means `"` or `{ 1 + 1 }"` (in the case of f-strings)...
         let (lit_kind, mode, prefix_len, postfix_len) = match kind {
             rustc_lexer::LiteralKind::Char { terminated } => {
                 if !terminated {
@@ -382,24 +435,66 @@ impl<'a> StringReader<'a> {
                 let n = u32::from(n_hashes);
                 (token::ByteStrRaw(n_hashes), Mode::RawByteStr, 3 + n, 1 + n) // br##" "##
             }
-            rustc_lexer::LiteralKind::FStr { start: start_delimiter, end: end_delimiter } => {
-                if end_delimiter.is_none() {
-                    let lo = if start_delimiter == rustc_lexer::FStrDelimiter::Quote { start + BytePos(1) } else { start };
+            rustc_lexer::LiteralKind::FStr { unterminated_delimiter_index } => {
+                if let Some(unterminated_delimiter_index) = unterminated_delimiter_index {
+                    let unterminated_delimiter_index =
+                        BytePos::from_usize(unterminated_delimiter_index);
                     self.sess
                         .span_diagnostic
                         .struct_span_fatal_with_code(
-                            self.mk_sp(lo, suffix_start),
-                            "unterminated double quote format string",
-                            error_code!(E0766),
+                            self.mk_sp(start, suffix_start),
+                            "unterminated double quote f-string", // TODO: "double quote" necessary here (and elsewhere)?
+                            error_code!(E0782),
+                        )
+                        .span_label(
+                            self.mk_sp(
+                                unterminated_delimiter_index,
+                                unterminated_delimiter_index + BytePos(1),
+                            ),
+                            "unclosed delimiter",
                         )
                         .emit();
                     FatalError.raise();
                 }
-                let prefix_len = match start_delimiter {
-                    rustc_lexer::FStrDelimiter::Quote => 2,
-                    rustc_lexer::FStrDelimiter::Brace => 1
-                };
-                (token::FStr(translate_f_str_delimiter(start_delimiter), translate_f_str_delimiter(end_delimiter.unwrap())), Mode::FStr, prefix_len, 1)
+
+                let (index, end_delimiter) = rustc_lexer::strip_f_string_segment(
+                    rustc_lexer::FStrDelimiter::Quote,
+                    self.str_from(start),
+                )
+                .expect("unhandled unclosed delimiter"); // (should be handled above)
+
+                if end_delimiter == rustc_lexer::FStrDelimiter::Brace {
+                    self.open_f_strings.push(self.brace_depth);
+                }
+
+                let prefix_len = rustc_lexer::FStrDelimiter::Quote.display(true).len() as u32;
+                let postfix_len = (self.pos - start - BytePos::from_usize(index)).to_u32() + 1;
+                debug!(
+                    "postfix: {:?}",
+                    self.str_from_to(suffix_start - BytePos::from_u32(postfix_len), suffix_start)
+                );
+                debug!(
+                    "self.pos: {:?}",
+                    self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
+                );
+                self.pos = suffix_start - BytePos::from_u32(postfix_len);
+                debug!(
+                    "self.pos: {:?}",
+                    self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
+                );
+                debug!(
+                    "content: {:?}",
+                    self.str_from_to(
+                        start + BytePos::from_u32(prefix_len),
+                        suffix_start - BytePos::from_u32(postfix_len)
+                    )
+                );
+                (
+                    token::FStr(token::FStrDelimiter::Quote, end_delimiter.into()),
+                    Mode::FStr,
+                    prefix_len,
+                    postfix_len,
+                )
             }
             rustc_lexer::LiteralKind::Int { base, empty_int } => {
                 return if empty_int {
@@ -594,13 +689,6 @@ impl<'a> StringReader<'a> {
                 self.err_span_(lo, hi, &format!("invalid digit for a base {} literal", base));
             }
         }
-    }
-}
-
-fn translate_f_str_delimiter(delimiter: rustc_lexer::FStrDelimiter) -> token::FStrDelimiter {
-    match delimiter {
-        rustc_lexer::FStrDelimiter::Quote => token::FStrDelimiter::Quote,
-        rustc_lexer::FStrDelimiter::Brace => token::FStrDelimiter::Brace
     }
 }
 

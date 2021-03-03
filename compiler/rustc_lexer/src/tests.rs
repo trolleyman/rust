@@ -450,7 +450,43 @@ fn f_string_multiline() {
 #[test]
 fn f_string_inner_string_literal() {
     check_lexing(
-        r#"f"foo { "bar}" } bar""#,
+        r#"f"foo { "bar}" } baz""#,
+        expect![[r#"
+            Token { kind: Literal { kind: FStr { start: Quote, end: Some(Brace) }, suffix_start: 7 }, len: 7 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 1 }, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Plus, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 1 }, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: FStr { start: Brace, end: None }, suffix_start: 5 }, len: 5 }
+        "#]],
+    )
+}
+
+#[test]
+fn f_string_almost_escaped() {
+    check_lexing(
+        r#"f"foo { { 3 }} bar""#,
+        expect![[r#"
+            Token { kind: Literal { kind: FStr { start: Quote, end: Some(Brace) }, suffix_start: 7 }, len: 7 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 1 }, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Plus, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 1 }, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: FStr { start: Brace, end: None }, suffix_start: 5 }, len: 5 }
+        "#]],
+    )
+}
+
+#[test]
+fn f_string_complex() {
+    check_lexing(
+        r#"f"foo { bar + f"quux { f"three == {{ 1 + 2 }}" + f"four => {{{ 2 + 2 }}}" } and { 4 + f"buzz {{\\}}{{" }" }""#,
         expect![[r#"
             Token { kind: Literal { kind: FStr { start: Quote, end: Some(Brace) }, suffix_start: 7 }, len: 7 }
             Token { kind: Whitespace, len: 1 }

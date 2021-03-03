@@ -137,13 +137,22 @@ pub enum DocStyle {
     Inner,
 }
 
-/// Delimiter of an f-string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FStrDelimiter {
-    /// `f"` or `"`
+    /// `f"` at the start, `"` at the end
     Quote,
-    /// `{` or `}`
+    /// `}` at the start, `{` at the end
     Brace,
+}
+impl FStrDelimiter {
+    pub fn display(&self, is_start: bool) -> &'static str {
+        match (self, is_start) {
+            (FStrDelimiter::Quote, true) => "f\"",
+            (FStrDelimiter::Quote, false) => "\"",
+            (FStrDelimiter::Brace, true) => "}",
+            (FStrDelimiter::Brace, false) => "{",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -165,7 +174,7 @@ pub enum LiteralKind {
     /// `br"abc"`, `br#"abc"#`, `br####"ab"###"c"####`, `br#"a`
     RawByteStr { n_hashes: u16, err: Option<RawStrError> },
     /// `f"foo{`, `} bar {`, `} quux"`, or `f"foo"`
-    FStr { start: FStrDelimiter, end: Option<FStrDelimiter> },
+    FStr { unterminated_delimiter_index: Option<usize> },
 }
 
 /// Error produced validating a raw string. Represents cases like:
@@ -220,6 +229,38 @@ pub fn strip_shebang(input: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// Given an f-string segment, returns the first delimiter that is encountered.
+///
+/// ```
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"simple""#), Some((8, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"f"simple""#), None);
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"}brace""#), Some((6, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"unterminated"#), None);
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"invalid start""#), None);
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"f-string" and some other words"#), Some((10, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"simple { "foo" }""#), Some((9, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"f"simple { "foo" }""#), Some((8, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"escaped {{ simple { "foo" }""#), Some((20, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"escaped \n simple { "foo" }""#), Some((20, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"escaped \\ simple { "foo" }""#), Some((20, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\ { "foo" }""#), Some((4, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\{ "foo" }""#), Some((12, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\u{0020}""#), Some((10, FStrDelimiter::Quote)));
+/// ```
+pub fn strip_f_string_segment(valid_start: FStrDelimiter, input: &str) -> Option<(usize, FStrDelimiter)> {
+    let expected_start = valid_start.display(true);
+    if !input.starts_with(expected_start) {
+        return None;
+    }
+    let mut cursor = Cursor::new(input);
+    cursor.bump_n(expected_start.len());
+    if let Some(delimiter) = cursor.f_string_segment() {
+        Some((cursor.len_consumed(), delimiter))
+    } else {
+        None
+    }
 }
 
 /// Parses the first token from the provided input string.
@@ -310,8 +351,13 @@ pub fn is_ident(string: &str) -> bool {
 impl Cursor<'_> {
     /// Parses a token from the input string.
     fn advance_token(&mut self) -> Token {
+        let token_kind = self.advance_token_kind();
+        Token::new(token_kind, self.len_consumed())
+    }
+
+    fn advance_token_kind(&mut self) -> TokenKind {
         let first_char = self.bump().unwrap();
-        let token_kind = match first_char {
+        match first_char {
             // Slash, comment or block comment.
             '/' => match self.first() {
                 '/' => self.line_comment(),
@@ -379,12 +425,13 @@ impl Cursor<'_> {
                         self.bump();
 
                         // Leave up to consumers to split up this f-string further, when unescaping.
-                        let end = self.f_string();
-                        let kind = FStr { start: FStrDelimiter::Quote, end: FStrDelimiter::Quote };
+                        let unterminated_delimiter_index = self.f_string();
+                        let kind = FStr { unterminated_delimiter_index };
                         let suffix_start = self.len_consumed();
-                        if terminated {
-                            self.eat_literal_suffix();
-                        }
+                        // Suffix not implemented. If implementing, would need to also implement TokenKind::CloseBrace properly in rustc_parse::lexer::cook_lexer_token
+                        //if unterminated_delimiter_index == None {
+                        //    self.eat_literal_suffix();
+                        //}
                         Literal { kind, suffix_start }
                     }
                     _ => self.ident(),
@@ -445,8 +492,7 @@ impl Cursor<'_> {
                 Literal { kind, suffix_start }
             }
             _ => Unknown,
-        };
-        Token::new(token_kind, self.len_consumed())
+        }
     }
 
     fn line_comment(&mut self) -> TokenKind {
@@ -684,10 +730,6 @@ impl Cursor<'_> {
     /// if string is terminated.
     fn double_quoted_string(&mut self) -> bool {
         debug_assert!(self.prev() == '"');
-        self.double_quoted_string_common()
-    }
-
-    fn double_quoted_string_common(&mut self) -> bool {
         while let Some(c) = self.bump() {
             match c {
                 '"' => {
@@ -782,10 +824,59 @@ impl Cursor<'_> {
         }
     }
 
-    /// Eats an f-string. Returns true if it was terminated.
-    fn f_string(&mut self) -> bool {
+    /// Eats an f-string. Returns Some(index) if it wasn't terminated, with index being the unclosed opening quote/brace index.
+    fn f_string(&mut self) -> Option<usize> {
+        debug_assert!(self.prev() == '"');
+        let open_quote_index = self.len_consumed();
+        loop {
+            match self.f_string_segment() {
+                Some(FStrDelimiter::Quote) => return None,
+                Some(FStrDelimiter::Brace) => {
+                    // Eat all of inner expression.
+                    let open_brace_index = self.len_consumed();
+                    let mut brace_count = 0;
+                    loop {
+                        if self.is_eof() {
+                            return Some(open_brace_index);
+                        }
+                        match self.advance_token_kind() {
+                            TokenKind::OpenBrace => brace_count += 1,
+                            TokenKind::CloseBrace if brace_count == 0 => break,
+                            TokenKind::CloseBrace => brace_count -= 1,
+                            _ => {}
+                        }
+                    }
+                }
+                None => return Some(open_quote_index),
+            }
+        }
+    }
+
+    /// Eats an f-string segment. Returns the delimiter that was encountered, if encountered.
+    fn f_string_segment(&mut self) -> Option<FStrDelimiter> {
         debug_assert!(self.prev() == '"' || self.prev() == '}');
-        self.double_quoted_string_common()
+        while let Some(c) = self.bump() {
+            match c {
+                '"' => return Some(FStrDelimiter::Quote),
+                '{' if self.first() == '{' => {
+                    // Bump again to skip escaped character.
+                    self.bump();
+                }
+                '{' => return Some(FStrDelimiter::Brace),
+                '\\' if self.first() == '\\' || self.first() == '"' => {
+                    // Bump again to skip escaped character.
+                    self.bump();
+                }
+                '\\' if self.first() == 'u' && self.second() == '{' => {
+                    // Skip unicode braces.
+                    self.bump();
+                    self.bump();
+                },
+                _ => (),
+            }
+        }
+        // End of file reached.
+        None
     }
 
     fn eat_decimal_digits(&mut self) -> bool {
