@@ -92,7 +92,7 @@ impl<'a> StringReader<'a> {
 
             let token = rustc_lexer::first_token(text);
             debug!(
-                "next_token: {:?}({:?})",
+                "next_token pre : {:?}({:?})",
                 token.kind,
                 self.str_from_to(self.pos, self.pos + BytePos::from_usize(token.len))
             );
@@ -102,6 +102,7 @@ impl<'a> StringReader<'a> {
 
             match self.cook_lexer_token(token.kind, start) {
                 Some(kind) => {
+                    debug!("next_token post: {:?}", kind);
                     let span = self.mk_sp(start, self.pos);
                     return (spacing, Token::new(kind, span));
                 }
@@ -255,7 +256,6 @@ impl<'a> StringReader<'a> {
                 token::OpenDelim(token::Brace)
             }
             rustc_lexer::TokenKind::CloseBrace => {
-                self.brace_depth -= 1;
                 if self.open_f_strings.len() > 0
                     && self.brace_depth == self.open_f_strings[self.open_f_strings.len() - 1]
                 {
@@ -289,6 +289,7 @@ impl<'a> StringReader<'a> {
                         suffix: None,
                     })
                 } else {
+                    self.brace_depth -= 1;
                     token::CloseDelim(token::Brace)
                 }
             }
@@ -477,7 +478,7 @@ impl<'a> StringReader<'a> {
                     "self.pos: {:?}",
                     self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
                 );
-                self.pos = suffix_start - BytePos::from_u32(postfix_len);
+                self.pos = start + BytePos::from_usize(index);
                 debug!(
                     "self.pos: {:?}",
                     self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
