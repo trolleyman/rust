@@ -92,7 +92,7 @@ impl<'a> StringReader<'a> {
 
             let token = rustc_lexer::first_token(text);
             debug!(
-                "next_token pre : {:?}({:?})",
+                "next_token raw: {:?}({:?})",
                 token.kind,
                 self.str_from_to(self.pos, self.pos + BytePos::from_usize(token.len))
             );
@@ -102,7 +102,7 @@ impl<'a> StringReader<'a> {
 
             match self.cook_lexer_token(token.kind, start) {
                 Some(kind) => {
-                    debug!("next_token post: {:?}", kind);
+                    debug!("next_token cooked: {:?}", kind);
                     let span = self.mk_sp(start, self.pos);
                     return (spacing, Token::new(kind, span));
                 }
@@ -146,7 +146,11 @@ impl<'a> StringReader<'a> {
     /// Turns simple `rustc_lexer::TokenKind` enum into a rich
     /// `librustc_ast::TokenKind`. This turns strings into interned
     /// symbols and runs additional validation.
-    fn cook_lexer_token(&mut self, token: rustc_lexer::TokenKind, start: BytePos) -> Option<TokenKind> {
+    fn cook_lexer_token(
+        &mut self,
+        token: rustc_lexer::TokenKind,
+        start: BytePos,
+    ) -> Option<TokenKind> {
         Some(match token {
             rustc_lexer::TokenKind::LineComment { doc_style } => {
                 // Skip non-doc comments
@@ -264,34 +268,12 @@ impl<'a> StringReader<'a> {
                         &self.src[self.src_index(self.pos - BytePos(1))..self.end_src_index],
                     )
                     .expect("unhandled unclosed delimiter"); // (lexer should never put us in this awkward position)
-                    debug!(
-                        "self.pos: {:?}",
-                        self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
-                    );
-                    debug!(
-                        "start: {:?}",
-                        self.str_from_to(start, start + BytePos::from_u32(1))
-                    );
                     self.pos = start + BytePos::from_usize(index);
-                    debug!(
-                        "self.pos: {:?}",
-                        self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
-                    );
 
                     let prefix_len = rustc_lexer::FStrDelimiter::Brace.display(true).len() as u32;
                     let postfix_len = end_delimiter.display(false).len() as u32;
                     let content_start = start + BytePos(prefix_len);
                     let content_end = self.pos - BytePos(postfix_len);
-                    debug!("index={}, start={:?}, self.pos={:?}, prefix_len={}, postfix_len={}, content_start={:?}, content_end={:?}", index, start, self.pos, prefix_len, postfix_len, content_start, content_end);
-                    debug!("from start: {:?}", &self.src[self.src_index(start)..self.end_src_index]);
-
-                    debug!(
-                        "content: {:?}",
-                        self.str_from_to(
-                            content_start,
-                            content_end
-                        )
-                    );
 
                     let symbol = self.symbol_from_to(content_start, content_end);
                     self.validate_literal_escape(
@@ -493,26 +475,7 @@ impl<'a> StringReader<'a> {
 
                 let prefix_len = rustc_lexer::FStrDelimiter::Quote.display(true).len() as u32;
                 let postfix_len = (self.pos - start - BytePos::from_usize(index)).to_u32() + 1;
-                debug!(
-                    "postfix: {:?}",
-                    self.str_from_to(suffix_start - BytePos::from_u32(postfix_len), suffix_start)
-                );
-                debug!(
-                    "self.pos: {:?}",
-                    self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
-                );
                 self.pos = start + BytePos::from_usize(index);
-                debug!(
-                    "self.pos: {:?}",
-                    self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
-                );
-                debug!(
-                    "content: {:?}",
-                    self.str_from_to(
-                        start + BytePos::from_u32(prefix_len),
-                        suffix_start - BytePos::from_u32(postfix_len)
-                    )
-                );
                 (
                     token::FStr(token::FStrDelimiter::Quote, end_delimiter.into()),
                     Mode::FStr,
