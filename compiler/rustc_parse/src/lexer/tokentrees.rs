@@ -327,7 +327,7 @@ impl<'a> TokenTreesReader<'a> {
                                 matches!(
                                     t.kind,
                                     token::Literal(token::Lit {
-                                        kind: token::LitKind::FStr(..),
+                                        kind: token::LitKind::FStr(token::FStrDelimiter::Brace, _),
                                         ..
                                     })
                                 )
