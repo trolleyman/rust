@@ -305,6 +305,7 @@ impl<'a> TokenTreesReader<'a> {
                                 start_delimiter,
                             )?;
                             buf.push((TokenTree::Token(self.token.clone()), Alone));
+                            self.bump();
                             break self.token.span.hi();
                         }
                         token::Literal(token::Lit {
