@@ -476,8 +476,8 @@ impl<'a> StringReader<'a> {
                 }
 
                 let prefix_len = rustc_lexer::FStrDelimiter::Quote.display(true).len() as u32;
-                let postfix_len = end_delimiter.display(false).len() as u32;
-                self.pos = start + BytePos::from_usize(index + postfix_len as usize);
+                let postfix_len = (self.pos - start - BytePos::from_usize(index)).to_u32();
+                self.pos = start + BytePos::from_usize(index + 1);
                 (
                     token::FStr(token::FStrDelimiter::Quote, end_delimiter.into()),
                     Mode::FStr,

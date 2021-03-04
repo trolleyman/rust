@@ -252,6 +252,10 @@ pub fn strip_shebang(input: &str) -> Option<usize> {
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\{ "foo" }""#), Some((5, FStrDelimiter::Quote)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\{ \"foo\" }""#), Some((14, FStrDelimiter::Quote)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\u{0020}""#), Some((10, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"""#), Some((2, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"{"#), Some((2, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"}""#), Some((1, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"}{"#), Some((1, FStrDelimiter::Brace)));
 /// ```
 pub fn strip_f_string_segment(valid_start: FStrDelimiter, input: &str) -> Option<(usize, FStrDelimiter)> {
     let expected_start = valid_start.display(true);
