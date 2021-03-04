@@ -264,12 +264,35 @@ impl<'a> StringReader<'a> {
                         &self.src[self.src_index(self.pos - BytePos(1))..self.end_src_index],
                     )
                     .expect("unhandled unclosed delimiter"); // (lexer should never put us in this awkward position)
-                    self.pos = self.pos + BytePos::from_usize(index - 1);
+                    debug!(
+                        "self.pos: {:?}",
+                        self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
+                    );
+                    debug!(
+                        "start: {:?}",
+                        self.str_from_to(start, start + BytePos::from_u32(1))
+                    );
+                    self.pos = start + BytePos::from_usize(index);
+                    debug!(
+                        "self.pos: {:?}",
+                        self.str_from_to(self.pos, self.pos + BytePos::from_u32(1))
+                    );
 
                     let prefix_len = rustc_lexer::FStrDelimiter::Brace.display(true).len() as u32;
-                    let postfix_len = end_delimiter.display(true).len() as u32;
+                    let postfix_len = end_delimiter.display(false).len() as u32;
                     let content_start = start + BytePos(prefix_len);
                     let content_end = self.pos - BytePos(postfix_len);
+                    debug!("index={}, start={:?}, self.pos={:?}, prefix_len={}, postfix_len={}, content_start={:?}, content_end={:?}", index, start, self.pos, prefix_len, postfix_len, content_start, content_end);
+                    debug!("from start: {:?}", &self.src[self.src_index(start)..self.end_src_index]);
+
+                    debug!(
+                        "content: {:?}",
+                        self.str_from_to(
+                            content_start,
+                            content_end
+                        )
+                    );
+
                     let symbol = self.symbol_from_to(content_start, content_end);
                     self.validate_literal_escape(
                         Mode::FStr,
