@@ -5,6 +5,6 @@ pub fn main() {
     let d = 2;
     let e = 3;
     let g = 4;
-    let result = f"a = {b + { f"c{d + e}f" + g }}h";
-    assert_eq!(result, "a = TODO");
+    let result = f"a = { f"b" + { f"c{d + e}f" + g }}h";
+    assert_eq!(result, "a = bc5 TODO");
 }
