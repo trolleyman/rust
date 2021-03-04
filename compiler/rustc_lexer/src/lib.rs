@@ -233,7 +233,10 @@ pub fn strip_shebang(input: &str) -> Option<usize> {
 
 /// Given an f-string segment, returns the first delimiter that is encountered.
 ///
+/// Handles `\{` and `{{` escapes, to aid debugging.
+///
 /// ```
+/// # use rustc_lexer::{strip_f_string_segment, FStrDelimiter};
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"simple""#), Some((8, FStrDelimiter::Quote)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"f"simple""#), None);
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"}brace""#), Some((6, FStrDelimiter::Quote)));
@@ -241,12 +244,13 @@ pub fn strip_shebang(input: &str) -> Option<usize> {
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"invalid start""#), None);
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"f-string" and some other words"#), Some((10, FStrDelimiter::Quote)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"simple { "foo" }""#), Some((9, FStrDelimiter::Brace)));
-/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"f"simple { "foo" }""#), Some((8, FStrDelimiter::Brace)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Brace, r#"}simple { "foo" }""#), Some((8, FStrDelimiter::Brace)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"escaped {{ simple { "foo" }""#), Some((20, FStrDelimiter::Brace)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"escaped \n simple { "foo" }""#), Some((20, FStrDelimiter::Brace)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"escaped \\ simple { "foo" }""#), Some((20, FStrDelimiter::Brace)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\ { "foo" }""#), Some((4, FStrDelimiter::Brace)));
-/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\{ "foo" }""#), Some((12, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\{ "foo" }""#), Some((5, FStrDelimiter::Quote)));
+/// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\{ \"foo\" }""#), Some((14, FStrDelimiter::Quote)));
 /// assert_eq!(strip_f_string_segment(FStrDelimiter::Quote, r#"f"\u{0020}""#), Some((10, FStrDelimiter::Quote)));
 /// ```
 pub fn strip_f_string_segment(valid_start: FStrDelimiter, input: &str) -> Option<(usize, FStrDelimiter)> {
@@ -257,7 +261,7 @@ pub fn strip_f_string_segment(valid_start: FStrDelimiter, input: &str) -> Option
     let mut cursor = Cursor::new(input);
     cursor.bump_n(expected_start.len());
     if let Some(delimiter) = cursor.f_string_segment() {
-        Some((cursor.len_consumed(), delimiter))
+        Some((cursor.len_consumed() - 1, delimiter))
     } else {
         None
     }
@@ -862,11 +866,11 @@ impl Cursor<'_> {
                     // Bump again to skip escaped character.
                     self.bump();
                 }
-                '{' => return Some(FStrDelimiter::Brace),
-                '\\' if self.first() == '\\' || self.first() == '"' => {
+                '\\' if self.first() == '\\' || self.first() == '"' || self.first() == '{' => {
                     // Bump again to skip escaped character.
                     self.bump();
                 }
+                '{' => return Some(FStrDelimiter::Brace),
                 '\\' if self.first() == 'u' && self.second() == '{' => {
                     // Skip unicode braces.
                     self.bump();

@@ -268,10 +268,12 @@ impl<'a> StringReader<'a> {
                         &self.src[self.src_index(self.pos - BytePos(1))..self.end_src_index],
                     )
                     .expect("unhandled unclosed delimiter"); // (lexer should never put us in this awkward position)
-                    self.pos = start + BytePos::from_usize(index);
 
                     let prefix_len = rustc_lexer::FStrDelimiter::Brace.display(true).len() as u32;
                     let postfix_len = end_delimiter.display(false).len() as u32;
+
+                    self.pos = start + BytePos::from_usize(index + postfix_len as usize);
+
                     let content_start = start + BytePos(prefix_len);
                     let content_end = self.pos - BytePos(postfix_len);
 
@@ -474,8 +476,8 @@ impl<'a> StringReader<'a> {
                 }
 
                 let prefix_len = rustc_lexer::FStrDelimiter::Quote.display(true).len() as u32;
-                let postfix_len = (self.pos - start - BytePos::from_usize(index)).to_u32() + 1;
-                self.pos = start + BytePos::from_usize(index);
+                let postfix_len = end_delimiter.display(false).len() as u32;
+                self.pos = start + BytePos::from_usize(index + postfix_len as usize);
                 (
                     token::FStr(token::FStrDelimiter::Quote, end_delimiter.into()),
                     Mode::FStr,
