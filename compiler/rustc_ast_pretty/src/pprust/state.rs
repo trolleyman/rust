@@ -906,7 +906,7 @@ impl<'a> State<'a> {
         }
     }
 
-    fn print_f_str(&mut self, f_str: &ast::FStr) {
+    crate fn print_f_str(&mut self, f_str: &ast::FStr) {
         fn transform_symbol(symbol: &Symbol) -> String {symbol
             .to_string()
             .escape_debug()
