@@ -1304,7 +1304,7 @@ fn clean_qpath(hir_ty: &hir::Ty<'_>, cx: &mut DocContext<'_>) -> Type {
                 // Substitute private type aliases
                 if let Some(def_id) = def_id.as_local() {
                     let hir_id = cx.tcx.hir().local_def_id_to_hir_id(def_id);
-                    if !cx.renderinfo.access_levels.is_exported(def_id.to_def_id()) {
+                    if !cx.cache.access_levels.is_exported(def_id.to_def_id()) {
                         alias = Some(&cx.tcx.hir().expect_item(hir_id).kind);
                     }
                 }
@@ -2129,12 +2129,12 @@ fn clean_extern_crate(
     }
     // FIXME: using `from_def_id_and_kind` breaks `rustdoc/masked` for some reason
     vec![Item {
-        name: None,
+        name: Some(name),
         attrs: box krate.attrs.clean(cx),
         source: krate.span.clean(cx),
         def_id: crate_def_id,
         visibility: krate.vis.clean(cx),
-        kind: box ExternCrateItem(name, orig_name),
+        kind: box ExternCrateItem { src: orig_name },
     }]
 }
 

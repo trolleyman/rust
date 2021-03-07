@@ -17,7 +17,9 @@ use rustc_hir::{
     self, FnSig, ForeignItem, ForeignItemKind, HirId, Item, ItemKind, TraitItem, CRATE_HIR_ID,
 };
 use rustc_hir::{MethodKind, Target};
-use rustc_session::lint::builtin::{CONFLICTING_REPR_HINTS, UNUSED_ATTRIBUTES};
+use rustc_session::lint::builtin::{
+    CONFLICTING_REPR_HINTS, INVALID_DOC_ATTRIBUTES, UNUSED_ATTRIBUTES,
+};
 use rustc_session::parse::feature_err;
 use rustc_span::symbol::{sym, Symbol};
 use rustc_span::{Span, DUMMY_SP};
@@ -542,6 +544,59 @@ impl CheckAttrVisitor<'tcx> {
                         if !self.check_attr_crate_level(meta, hir_id, "keyword")
                             || !self.check_doc_keyword(meta, hir_id)
                         {
+                            return false;
+                        }
+                    } else if meta.has_name(sym::test) {
+                        if CRATE_HIR_ID != hir_id {
+                            self.tcx.struct_span_lint_hir(
+                                INVALID_DOC_ATTRIBUTES,
+                                hir_id,
+                                meta.span(),
+                                |lint| {
+                                    lint.build(
+                                        "`#![doc(test(...)]` is only allowed as a crate level attribute"
+                                    )
+                                    .emit();
+                                },
+                            );
+                            return false;
+                        }
+                    } else if let Some(i_meta) = meta.meta_item() {
+                        if ![
+                            sym::cfg,
+                            sym::hidden,
+                            sym::html_favicon_url,
+                            sym::html_logo_url,
+                            sym::html_no_source,
+                            sym::html_playground_url,
+                            sym::html_root_url,
+                            sym::include,
+                            sym::inline,
+                            sym::issue_tracker_base_url,
+                            sym::masked,
+                            sym::no_default_passes, // deprecated
+                            sym::no_inline,
+                            sym::passes,  // deprecated
+                            sym::plugins, // removed, but rustdoc warns about it itself
+                            sym::primitive,
+                            sym::spotlight,
+                            sym::test,
+                        ]
+                        .iter()
+                        .any(|m| i_meta.has_name(*m))
+                        {
+                            self.tcx.struct_span_lint_hir(
+                                INVALID_DOC_ATTRIBUTES,
+                                hir_id,
+                                i_meta.span,
+                                |lint| {
+                                    lint.build(&format!(
+                                        "unknown `doc` attribute `{}`",
+                                        i_meta.name_or_empty()
+                                    ))
+                                    .emit();
+                                },
+                            );
                             return false;
                         }
                     }

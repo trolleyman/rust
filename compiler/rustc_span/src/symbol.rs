@@ -18,7 +18,7 @@ use crate::{Edition, Span, DUMMY_SP, SESSION_GLOBALS};
 #[cfg(test)]
 mod tests;
 
-// The proc macro code for this is in `src/librustc_macros/src/symbols.rs`.
+// The proc macro code for this is in `compiler/rustc_macros/src/symbols.rs`.
 symbols! {
     // After modifying this list adjust `is_special`, `is_used_keyword`/`is_unused_keyword`,
     // this should be rarely necessary though if the keywords are kept in alphabetic order.
@@ -126,6 +126,10 @@ symbols! {
         Argument,
         ArgumentV1,
         Arguments,
+        BTreeMap,
+        BTreeSet,
+        BinaryHeap,
+        Borrow,
         C,
         CString,
         Center,
@@ -138,6 +142,7 @@ symbols! {
         Decodable,
         Decoder,
         Default,
+        Deref,
         Encodable,
         Encoder,
         Eq,
@@ -163,6 +168,7 @@ symbols! {
         Iterator,
         Layout,
         Left,
+        LinkedList,
         LintPass,
         None,
         Ok,
@@ -191,6 +197,7 @@ symbols! {
         RangeToInclusive,
         Rc,
         Ready,
+        Receiver,
         Result,
         Return,
         Right,
@@ -592,6 +599,8 @@ symbols! {
         gt,
         half_open_range_patterns,
         hash,
+        hashmap_type,
+        hashset_type,
         hexagon_target_feature,
         hidden,
         homogeneous_aggregate,
@@ -627,6 +636,7 @@ symbols! {
         index_mut,
         infer_outlives_requirements,
         infer_static_outlives_requirements,
+        inherent_associated_types,
         inlateout,
         inline,
         inline_const,
@@ -781,6 +791,9 @@ symbols! {
         none_error,
         nontemporal_store,
         nontrapping_dash_fptoint: "nontrapping-fptoint",
+        noop_method_borrow,
+        noop_method_clone,
+        noop_method_deref,
         noreturn,
         nostack,
         not,
@@ -1013,6 +1026,7 @@ symbols! {
         rustc_then_this_would_need,
         rustc_unsafe_specialization_marker,
         rustc_variance,
+        rustdoc,
         rustfmt,
         rvalue_static_promotion,
         sanitize,
@@ -1256,6 +1270,7 @@ symbols! {
         variant_count,
         vec,
         vec_type,
+        vecdeque_type,
         version,
         vis,
         visible_private_types,

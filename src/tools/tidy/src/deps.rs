@@ -132,6 +132,8 @@ const PERMITTED_DEPENDENCIES: &[&str] = &[
     "parking_lot",
     "parking_lot_core",
     "pathdiff",
+    "perf-event-open-sys",
+    "pin-project-lite",
     "pkg-config",
     "polonius-engine",
     "ppv-lite86",
