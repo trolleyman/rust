@@ -77,6 +77,8 @@ impl<'hir> LoweringContext<'_, 'hir> {
                 }
                 ExprKind::Lit(ref l) => hir::ExprKind::Lit(respan(l.span, l.kind.clone())),
                 ExprKind::FStr(ref f_str) => todo!("todo: {:#?}", f_str),
+                // TODO: library/core/src/fmt/mod.rs - pub mod rt && Arguments::new() will be good here.
+                //       Also take a look at src/tools/rust-analyzer/crates/hir_expand/src/builtin_macro.rs (fn format_args_expand)
                 ExprKind::Cast(ref expr, ref ty) => {
                     let expr = self.lower_expr(expr);
                     let ty = self.lower_ty(ty, ImplTraitContext::disallowed());

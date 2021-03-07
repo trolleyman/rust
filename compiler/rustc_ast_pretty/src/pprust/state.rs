@@ -907,30 +907,27 @@ impl<'a> State<'a> {
     }
 
     fn print_f_str(&mut self, f_str: &ast::FStr) {
+        fn transform_symbol(symbol: &Symbol) -> String {symbol
+            .to_string()
+            .escape_debug()
+            .to_string()
+            .replace("{", "{{")
+            .replace("}", "}}")}
+
         // TODO? self.maybe_print_comment(lit.span.lo());
-        let mut buffer = "f\"".to_string();
-        for segment in &f_str.segments {
-            match segment {
-                ast::FStrSegment::Str(symbol) => {
-                    let st = symbol
-                        .to_string()
-                        .escape_debug()
-                        .to_string()
-                        .replace("{", "{{")
-                        .replace("}", "}}");
-                    buffer.push_str(&st);
-                }
-                ast::FStrSegment::Expr(expr) => {
-                    buffer.push('{');
-                    self.word(buffer.clone());
-                    buffer.clear();
-                    self.print_expr(expr);
-                    buffer.push('}');
-                }
-            }
+        let mut idx = 0;
+
+        for (arg, (symbol, _)) in f_str.args.iter().zip(f_str.pieces.iter()) {
+            let st = transform_symbol(symbol);
+            self.word(format!("{}{}{{", if idx == 0 { "f\"" } else { "}" }, st));
+            self.print_expr(arg);
+            idx += 1;
         }
-        buffer.push_str("\"");
-        self.word(buffer);
+
+        if let Some((symbol, _)) = f_str.pieces.get(idx) {
+            let st = transform_symbol(symbol);
+            self.word(format!("{}{}\"", if idx == 0 { "f\"" } else { "}" }, st));
+        }
     }
 
     pub fn print_assoc_constraint(&mut self, constraint: &ast::AssocTyConstraint) {

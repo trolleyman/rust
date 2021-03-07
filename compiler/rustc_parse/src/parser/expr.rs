@@ -12,7 +12,7 @@ use rustc_ast::util::literal::LitError;
 use rustc_ast::util::parser::{prec_let_scrutinee_needs_par, AssocOp, Fixity};
 use rustc_ast::{self as ast, AttrStyle, AttrVec, CaptureBy, Field, Lit, UnOp, DUMMY_NODE_ID};
 use rustc_ast::{
-    AnonConst, BinOp, BinOpKind, FStr, FStrSegment, FnDecl, FnRetTy, MacCall, Param, Ty, TyKind,
+    AnonConst, BinOp, BinOpKind, FStr, FnDecl, FnRetTy, MacCall, Param, Ty, TyKind,
 };
 use rustc_ast::{Arm, Async, BlockCheckMode, Expr, ExprKind, Label, Movability, RangeLimits};
 use rustc_ast_pretty::pprust;
@@ -1261,11 +1261,10 @@ impl<'a> Parser<'a> {
         self.struct_span_err(self.token.span, &msg)
     }
 
-    fn parse_f_str_segment(
+    fn parse_f_str_piece(
         &mut self,
         expected_start_delimiter: token::FStrDelimiter,
     ) -> Option<(Symbol, token::FStrDelimiter)> {
-        // TODO: Change span to be whole literal?
         if let TokenKind::Literal(lit) = self.token.kind {
             if let token::FStr(start_delimiter, end_delimiter) = lit.kind {
                 if start_delimiter != expected_start_delimiter {
@@ -1289,26 +1288,27 @@ impl<'a> Parser<'a> {
                 self.sess.gated_spans.gate(sym::f_strings, self.token.span);
 
                 let (symbol, mut end_delimiter) = self
-                    .parse_f_str_segment(token::FStrDelimiter::Quote)
+                    .parse_f_str_piece(token::FStrDelimiter::Quote)
                     .ok_or_else(|| self.error_expected_f_string())?;
-                let mut segments = vec![FStrSegment::Str(symbol)];
+
+                let mut pieces = vec![(symbol, self.prev_token.span)];
+                let mut args = vec![];
 
                 while end_delimiter == token::FStrDelimiter::Brace {
-                    let expr = self.parse_expr()?;
-                    segments.push(FStrSegment::Expr(expr));
+                    args.push(self.parse_expr()?);
 
-                    let segment = self
-                        .parse_f_str_segment(token::FStrDelimiter::Brace)
+                    let piece = self
+                        .parse_f_str_piece(token::FStrDelimiter::Brace)
                         .ok_or_else(|| self.error_expected_f_string())?;
-                    end_delimiter = segment.1;
-                    // TODO: Add span information to `FStrSegment::Str`s?
-                    segments.push(FStrSegment::Str(segment.0));
+                    end_delimiter = piece.1;
+                    pieces.push((piece.0, self.prev_token.span));
                 }
 
                 // TODO: Check if attrs should be passed through
+                let span = lo.to(self.prev_token.span);
                 let expr = self.mk_expr(
-                    lo.to(self.prev_token.span),
-                    ExprKind::FStr(FStr { segments }),
+                    span,
+                    ExprKind::FStr(FStr { pieces, args, span }),
                     attrs,
                 );
                 // TODO: Need this?: self.maybe_recover_from_bad_qpath(expr, true)

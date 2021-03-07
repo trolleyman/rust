@@ -748,12 +748,9 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {
         ExprKind::AddrOf(_, _, ref subexpression) | ExprKind::Unary(_, ref subexpression) => {
             visitor.visit_expr(subexpression)
         }
-        ExprKind::FStr(ref fstr) => {
-            for segment in &fstr.segments {
-                match segment {
-                    FStrSegment::Expr(ex) => visitor.visit_expr(ex),
-                    FStrSegment::Str(_) => {}
-                }
+        ExprKind::FStr(ref f_str) => {
+            for arg in f_str.args.iter() {
+                visitor.visit_expr(arg);
             }
         }
         ExprKind::Cast(ref subexpression, ref typ) | ExprKind::Type(ref subexpression, ref typ) => {

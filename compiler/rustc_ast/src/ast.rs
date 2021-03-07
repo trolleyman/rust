@@ -1282,7 +1282,7 @@ pub enum ExprKind {
     Unary(UnOp, P<Expr>),
     /// A literal (e.g., `1`, `"foo"`).
     Lit(Lit),
-    /// An f-string (e.g. `f"foo == {1 + 1}"`)
+    /// An f-string (e.g. `f"foo {bar + 1}"`)
     FStr(FStr),
     /// A cast (e.g., `foo as f64`).
     Cast(P<Expr>, P<Ty>),
@@ -1674,17 +1674,16 @@ impl LitKind {
     }
 }
 
-/// Segment of an f-string.
-#[derive(Clone, Encodable, Decodable, Debug)]
-pub enum FStrSegment {
-    Str(Symbol),
-    Expr(P<Expr>),
-}
-
-/// F-string. TODO.
+/// F-string. Mirrors structure of std::fmt::Arguments.
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct FStr {
-    pub segments: Vec<FStrSegment>,
+    /// Format string pieces to print
+    pub pieces: Vec<(Symbol, Span)>,
+    /// Dynamic arguments for interpolation, to be interleaved with string
+    /// pieces. (Every argument is preceded by a string piece.)
+    // FIXME: Add formatting parameters https://doc.rust-lang.org/stable/std/fmt/index.html#formatting-parameters
+    pub args: Vec<P<Expr>>,
+    pub span: Span,
 }
 
 // N.B., If you change this, you'll probably want to change the corresponding
