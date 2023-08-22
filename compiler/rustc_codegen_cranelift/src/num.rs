@@ -118,7 +118,7 @@ pub(crate) fn codegen_int_binop<'tcx>(
         );
     }
 
-    if let Some(res) = crate::codegen_i128::maybe_codegen(fx, bin_op, false, in_lhs, in_rhs) {
+    if let Some(res) = crate::codegen_i128::maybe_codegen(fx, bin_op, in_lhs, in_rhs) {
         return res;
     }
 
@@ -128,10 +128,11 @@ pub(crate) fn codegen_int_binop<'tcx>(
     let rhs = in_rhs.load_scalar(fx);
 
     let b = fx.bcx.ins();
+    // FIXME trap on overflow for the Unchecked versions
     let val = match bin_op {
-        BinOp::Add => b.iadd(lhs, rhs),
-        BinOp::Sub => b.isub(lhs, rhs),
-        BinOp::Mul => b.imul(lhs, rhs),
+        BinOp::Add | BinOp::AddUnchecked => b.iadd(lhs, rhs),
+        BinOp::Sub | BinOp::SubUnchecked => b.isub(lhs, rhs),
+        BinOp::Mul | BinOp::MulUnchecked => b.imul(lhs, rhs),
         BinOp::Div => {
             if signed {
                 b.sdiv(lhs, rhs)
@@ -149,16 +150,19 @@ pub(crate) fn codegen_int_binop<'tcx>(
         BinOp::BitXor => b.bxor(lhs, rhs),
         BinOp::BitAnd => b.band(lhs, rhs),
         BinOp::BitOr => b.bor(lhs, rhs),
-        BinOp::Shl => b.ishl(lhs, rhs),
-        BinOp::Shr => {
+        BinOp::Shl | BinOp::ShlUnchecked => b.ishl(lhs, rhs),
+        BinOp::Shr | BinOp::ShrUnchecked => {
             if signed {
                 b.sshr(lhs, rhs)
             } else {
                 b.ushr(lhs, rhs)
             }
         }
+        BinOp::Offset => unreachable!("Offset is not an integer operation"),
         // Compare binops handles by `codegen_binop`.
-        _ => unreachable!("{:?}({:?}, {:?})", bin_op, in_lhs.layout().ty, in_rhs.layout().ty),
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+            unreachable!("{:?}({:?}, {:?})", bin_op, in_lhs.layout().ty, in_rhs.layout().ty);
+        }
     };
 
     CValue::by_val(val, in_lhs.layout())
@@ -173,7 +177,7 @@ pub(crate) fn codegen_checked_int_binop<'tcx>(
     let lhs = in_lhs.load_scalar(fx);
     let rhs = in_rhs.load_scalar(fx);
 
-    if let Some(res) = crate::codegen_i128::maybe_codegen(fx, bin_op, true, in_lhs, in_rhs) {
+    if let Some(res) = crate::codegen_i128::maybe_codegen_checked(fx, bin_op, in_lhs, in_rhs) {
         return res;
     }
 
@@ -266,7 +270,7 @@ pub(crate) fn codegen_checked_int_binop<'tcx>(
         _ => bug!("binop {:?} on checked int/uint lhs: {:?} rhs: {:?}", bin_op, in_lhs, in_rhs),
     };
 
-    let out_layout = fx.layout_of(fx.tcx.mk_tup(&[in_lhs.layout().ty, fx.tcx.types.bool]));
+    let out_layout = fx.layout_of(Ty::new_tup(fx.tcx, &[in_lhs.layout().ty, fx.tcx.types.bool]));
     CValue::by_val_pair(res, has_overflow, out_layout)
 }
 

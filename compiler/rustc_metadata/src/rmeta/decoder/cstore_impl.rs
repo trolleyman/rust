@@ -6,6 +6,7 @@ use crate::rmeta::AttrFlags;
 
 use rustc_ast as ast;
 use rustc_attr::Deprecation;
+use rustc_data_structures::sync::Lrc;
 use rustc_hir::def::{CtorKind, DefKind, Res};
 use rustc_hir::def_id::{CrateNum, DefId, DefIdMap, LOCAL_CRATE};
 use rustc_hir::definitions::{DefKey, DefPath, DefPathHash};
@@ -14,8 +15,8 @@ use rustc_middle::metadata::ModChild;
 use rustc_middle::middle::exported_symbols::ExportedSymbol;
 use rustc_middle::middle::stability::DeprecationEntry;
 use rustc_middle::query::LocalCrate;
+use rustc_middle::query::{ExternProviders, Providers};
 use rustc_middle::ty::fast_reject::SimplifiedType;
-use rustc_middle::ty::query::{ExternProviders, Providers};
 use rustc_middle::ty::{self, TyCtxt};
 use rustc_session::cstore::CrateStore;
 use rustc_session::{Session, StableCrateId};
@@ -23,7 +24,6 @@ use rustc_span::hygiene::{ExpnHash, ExpnId};
 use rustc_span::symbol::{kw, Symbol};
 use rustc_span::Span;
 
-use rustc_data_structures::sync::Lrc;
 use std::any::Any;
 
 use super::{Decodable, DecodeContext, DecodeIterator};
@@ -114,8 +114,8 @@ macro_rules! provide_one {
     ($tcx:ident, $def_id:ident, $other:ident, $cdata:ident, $name:ident => $compute:block) => {
         fn $name<'tcx>(
             $tcx: TyCtxt<'tcx>,
-            def_id_arg: ty::query::query_keys::$name<'tcx>,
-        ) -> ty::query::query_provided::$name<'tcx> {
+            def_id_arg: rustc_middle::query::queries::$name::Key<'tcx>,
+        ) -> rustc_middle::query::queries::$name::ProvidedValue<'tcx> {
             let _prof_timer =
                 $tcx.prof.generic_activity(concat!("metadata_decode_entry_", stringify!($name)));
 
@@ -203,7 +203,7 @@ impl IntoArgs for (CrateNum, SimplifiedType) {
 }
 
 provide! { tcx, def_id, other, cdata,
-    explicit_item_bounds => { table_defaulted_array }
+    explicit_item_bounds => { cdata.get_explicit_item_bounds(def_id.index, tcx) }
     explicit_predicates_of => { table }
     generics_of => { table }
     inferred_outlives_of => { table_defaulted_array }
@@ -218,6 +218,7 @@ provide! { tcx, def_id, other, cdata,
     thir_abstract_const => { table }
     optimized_mir => { table }
     mir_for_ctfe => { table }
+    closure_saved_names_of_captured_variables => { table }
     mir_generator_witnesses => { table }
     promoted_mir => { table }
     def_span => { table }
@@ -231,7 +232,7 @@ provide! { tcx, def_id, other, cdata,
     opt_def_kind => { table_direct }
     impl_parent => { table }
     impl_polarity => { table_direct }
-    impl_defaultness => { table_direct }
+    defaultness => { table_direct }
     constness => { table_direct }
     coerce_unsized_info => { table }
     mir_const_qualif => { table }
@@ -245,6 +246,7 @@ provide! { tcx, def_id, other, cdata,
         debug_assert_eq!(tcx.def_kind(def_id), DefKind::OpaqueTy);
         cdata.root.tables.is_type_alias_impl_trait.get(cdata, def_id.index)
     }
+    assumed_wf_types_for_rpitit => { table }
     collect_return_position_impl_trait_in_trait_tys => {
         Ok(cdata
             .root
@@ -253,7 +255,19 @@ provide! { tcx, def_id, other, cdata,
             .get(cdata, def_id.index)
             .map(|lazy| lazy.decode((cdata, tcx)))
             .process_decoded(tcx, || panic!("{def_id:?} does not have trait_impl_trait_tys")))
-     }
+    }
+    implied_predicates_of => {
+        cdata
+            .root
+            .tables
+            .implied_predicates_of
+            .get(cdata, def_id.index)
+            .map(|lazy| lazy.decode((cdata, tcx)))
+            .unwrap_or_else(|| {
+                debug_assert_eq!(tcx.def_kind(def_id), DefKind::Trait);
+                tcx.super_predicates_of(def_id)
+            })
+    }
 
     associated_types_for_impl_traits_in_associated_fn => { table_defaulted_array }
 
@@ -264,17 +278,22 @@ provide! { tcx, def_id, other, cdata,
         tcx.calculate_dtor(def_id, |_,_| Ok(()))
     }
     associated_item_def_ids => {
-        tcx.arena.alloc_from_iter(cdata.get_associated_item_def_ids(def_id.index, tcx.sess))
+        tcx.arena.alloc_from_iter(cdata.get_associated_item_or_field_def_ids(def_id.index))
     }
     associated_item => { cdata.get_associated_item(def_id.index, tcx.sess) }
     inherent_impls => { cdata.get_inherent_implementations_for_type(tcx, def_id.index) }
-    is_foreign_item => { cdata.is_foreign_item(def_id.index) }
     item_attrs => { tcx.arena.alloc_from_iter(cdata.get_item_attrs(def_id.index, tcx.sess)) }
     is_mir_available => { cdata.is_item_mir_available(def_id.index) }
     is_ctfe_mir_available => { cdata.is_ctfe_mir_available(def_id.index) }
 
     dylib_dependency_formats => { cdata.get_dylib_dependency_formats(tcx) }
-    is_private_dep => { cdata.private_dep }
+    is_private_dep => {
+        // Parallel compiler needs to synchronize type checking and linting (which use this flag)
+        // so that they happen strictly crate loading. Otherwise, the full list of available
+        // impls aren't loaded yet.
+        use std::sync::atomic::Ordering;
+        cdata.private_dep.load(Ordering::Acquire)
+    }
     is_panic_runtime => { cdata.root.panic_runtime }
     is_compiler_builtins => { cdata.root.compiler_builtins }
     has_global_allocator => { cdata.root.has_global_allocator }
@@ -306,13 +325,13 @@ provide! { tcx, def_id, other, cdata,
     }
     native_libraries => { cdata.get_native_libraries(tcx.sess).collect() }
     foreign_modules => { cdata.get_foreign_modules(tcx.sess).map(|m| (m.def_id, m)).collect() }
-    crate_hash => { cdata.root.hash }
+    crate_hash => { cdata.root.header.hash }
     crate_host_hash => { cdata.host_hash }
-    crate_name => { cdata.root.name }
+    crate_name => { cdata.root.header.name }
 
     extra_filename => { cdata.root.extra_filename.clone() }
 
-    traits_in_crate => { tcx.arena.alloc_from_iter(cdata.get_traits()) }
+    traits => { tcx.arena.alloc_from_iter(cdata.get_traits()) }
     trait_impls_in_crate => { tcx.arena.alloc_from_iter(cdata.get_trait_impls()) }
     implementations_of_trait => { cdata.get_implementations_of_trait(tcx, other) }
     crate_incoherent_impls => { cdata.get_incoherent_impls(tcx, other) }
@@ -328,6 +347,7 @@ provide! { tcx, def_id, other, cdata,
     stability_implications => {
         cdata.get_stability_implications(tcx).iter().copied().collect()
     }
+    stripped_cfg_items => { cdata.get_stripped_cfg_items(cdata.cnum, tcx) }
     is_intrinsic => { cdata.get_is_intrinsic(def_id.index) }
     defined_lang_items => { cdata.get_lang_items(tcx) }
     diagnostic_items => { cdata.get_diagnostic_items() }
@@ -384,10 +404,8 @@ pub(in crate::rmeta) fn provide(providers: &mut Providers) {
                         .contains(&id)
                 })
         },
-        native_libraries: |tcx, LocalCrate| native_libs::collect(tcx),
-        foreign_modules: |tcx, LocalCrate| {
-            foreign_modules::collect(tcx).into_iter().map(|m| (m.def_id, m)).collect()
-        },
+        native_libraries: native_libs::collect,
+        foreign_modules: foreign_modules::collect,
 
         // Returns a map from a sufficiently visible external item (i.e., an
         // external item that is visible from at least one local module) to a
@@ -504,20 +522,13 @@ impl CStore {
         self.get_crate_data(def.krate).get_ctor(def.index)
     }
 
-    pub fn module_children_untracked<'a>(
-        &'a self,
-        def_id: DefId,
-        sess: &'a Session,
-    ) -> impl Iterator<Item = ModChild> + 'a {
-        self.get_crate_data(def_id.krate).get_module_children(def_id.index, sess)
-    }
-
-    pub fn load_macro_untracked(&self, id: DefId, sess: &Session) -> LoadedMacro {
+    pub fn load_macro_untracked(&self, id: DefId, tcx: TyCtxt<'_>) -> LoadedMacro {
+        let sess = tcx.sess;
         let _prof_timer = sess.prof.generic_activity("metadata_load_macro");
 
         let data = self.get_crate_data(id.krate);
         if data.root.is_proc_macro_crate() {
-            return LoadedMacro::ProcMacro(data.load_proc_macro(id.index, sess));
+            return LoadedMacro::ProcMacro(data.load_proc_macro(id.index, tcx));
         }
 
         let span = data.get_span(id.index, sess);
@@ -578,7 +589,7 @@ impl CrateStore for CStore {
     }
 
     fn crate_name(&self, cnum: CrateNum) -> Symbol {
-        self.get_crate_data(cnum).root.name
+        self.get_crate_data(cnum).root.header.name
     }
 
     fn stable_crate_id(&self, cnum: CrateNum) -> StableCrateId {

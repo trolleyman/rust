@@ -33,6 +33,11 @@ pub fn method_context(cx: &LateContext<'_>, id: LocalDefId) -> MethodLateContext
     }
 }
 
+fn assoc_item_in_trait_impl(cx: &LateContext<'_>, ii: &hir::ImplItem<'_>) -> bool {
+    let item = cx.tcx.associated_item(ii.owner_id);
+    item.trait_item_def_id.is_some()
+}
+
 declare_lint! {
     /// The `non_camel_case_types` lint detects types, variants, traits and
     /// type parameters that don't have camel case names.
@@ -177,6 +182,7 @@ impl EarlyLintPass for NonCamelCaseTypes {
             // trait impls where we should have warned for the trait definition already.
             ast::ItemKind::Impl(box ast::Impl { of_trait: None, items, .. }) => {
                 for it in items {
+                    // FIXME: this doesn't respect `#[allow(..)]` on the item itself.
                     if let ast::AssocItemKind::Type(..) = it.kind {
                         self.check_case(cx, "associated type", &it.ident);
                     }
@@ -505,7 +511,7 @@ impl<'tcx> LateLintPass<'tcx> for NonUpperCaseGlobals {
     }
 
     fn check_impl_item(&mut self, cx: &LateContext<'_>, ii: &hir::ImplItem<'_>) {
-        if let hir::ImplItemKind::Const(..) = ii.kind {
+        if let hir::ImplItemKind::Const(..) = ii.kind && !assoc_item_in_trait_impl(cx, ii) {
             NonUpperCaseGlobals::check_upper_case(cx, "associated constant", &ii.ident);
         }
     }
@@ -527,6 +533,10 @@ impl<'tcx> LateLintPass<'tcx> for NonUpperCaseGlobals {
 
     fn check_generic_param(&mut self, cx: &LateContext<'_>, param: &hir::GenericParam<'_>) {
         if let GenericParamKind::Const { .. } = param.kind {
+            // `rustc_host` params are explicitly allowed to be lowercase.
+            if cx.tcx.has_attr(param.def_id, sym::rustc_host) {
+                return;
+            }
             NonUpperCaseGlobals::check_upper_case(cx, "const parameter", &param.name.ident());
         }
     }

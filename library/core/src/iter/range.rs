@@ -1,6 +1,6 @@
 use crate::convert::TryFrom;
-use crate::marker::Destruct;
 use crate::mem;
+use crate::num::NonZeroUsize;
 use crate::ops::{self, Try};
 
 use super::{
@@ -21,8 +21,7 @@ unsafe_impl_trusted_step![char i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usi
 /// The *successor* operation moves towards values that compare greater.
 /// The *predecessor* operation moves towards values that compare lesser.
 #[unstable(feature = "step_trait", reason = "recently redesigned", issue = "42168")]
-#[const_trait]
-pub trait Step: ~const Clone + ~const PartialOrd + Sized {
+pub trait Step: Clone + PartialOrd + Sized {
     /// Returns the number of *successor* steps required to get from `start` to `end`.
     ///
     /// Returns `None` if the number of steps would overflow `usize`
@@ -236,8 +235,7 @@ macro_rules! step_integer_impls {
         $(
             #[allow(unreachable_patterns)]
             #[unstable(feature = "step_trait", reason = "recently redesigned", issue = "42168")]
-            #[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-            impl const Step for $u_narrower {
+            impl Step for $u_narrower {
                 step_identical_methods!();
 
                 #[inline]
@@ -269,8 +267,7 @@ macro_rules! step_integer_impls {
 
             #[allow(unreachable_patterns)]
             #[unstable(feature = "step_trait", reason = "recently redesigned", issue = "42168")]
-            #[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-            impl const Step for $i_narrower {
+            impl Step for $i_narrower {
                 step_identical_methods!();
 
                 #[inline]
@@ -334,8 +331,7 @@ macro_rules! step_integer_impls {
         $(
             #[allow(unreachable_patterns)]
             #[unstable(feature = "step_trait", reason = "recently redesigned", issue = "42168")]
-            #[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-            impl const Step for $u_wider {
+            impl Step for $u_wider {
                 step_identical_methods!();
 
                 #[inline]
@@ -360,8 +356,7 @@ macro_rules! step_integer_impls {
 
             #[allow(unreachable_patterns)]
             #[unstable(feature = "step_trait", reason = "recently redesigned", issue = "42168")]
-            #[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-            impl const Step for $i_wider {
+            impl Step for $i_wider {
                 step_identical_methods!();
 
                 #[inline]
@@ -411,8 +406,7 @@ step_integer_impls! {
 }
 
 #[unstable(feature = "step_trait", reason = "recently redesigned", issue = "42168")]
-#[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-impl const Step for char {
+impl Step for char {
     #[inline]
     fn steps_between(&start: &char, &end: &char) -> Option<usize> {
         let start = start as u32;
@@ -430,7 +424,6 @@ impl const Step for char {
     }
 
     #[inline]
-    #[rustc_allow_const_fn_unstable(const_try)]
     fn forward_checked(start: char, count: usize) -> Option<char> {
         let start = start as u32;
         let mut res = Step::forward_checked(start, count)?;
@@ -447,7 +440,6 @@ impl const Step for char {
     }
 
     #[inline]
-    #[rustc_allow_const_fn_unstable(const_try)]
     fn backward_checked(start: char, count: usize) -> Option<char> {
         let start = start as u32;
         let mut res = Step::backward_checked(start, count)?;
@@ -523,22 +515,21 @@ macro_rules! range_incl_exact_iter_impl {
 }
 
 /// Specialization implementations for `Range`.
-#[const_trait]
 trait RangeIteratorImpl {
     type Item;
 
     // Iterator
     fn spec_next(&mut self) -> Option<Self::Item>;
     fn spec_nth(&mut self, n: usize) -> Option<Self::Item>;
-    fn spec_advance_by(&mut self, n: usize) -> Result<(), usize>;
+    fn spec_advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize>;
 
     // DoubleEndedIterator
     fn spec_next_back(&mut self) -> Option<Self::Item>;
     fn spec_nth_back(&mut self, n: usize) -> Option<Self::Item>;
-    fn spec_advance_back_by(&mut self, n: usize) -> Result<(), usize>;
+    fn spec_advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize>;
 }
 
-impl<A: ~const Step + ~const Destruct> const RangeIteratorImpl for ops::Range<A> {
+impl<A: Step> RangeIteratorImpl for ops::Range<A> {
     type Item = A;
 
     #[inline]
@@ -567,7 +558,7 @@ impl<A: ~const Step + ~const Destruct> const RangeIteratorImpl for ops::Range<A>
     }
 
     #[inline]
-    default fn spec_advance_by(&mut self, n: usize) -> Result<(), usize> {
+    default fn spec_advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         let available = if self.start <= self.end {
             Step::steps_between(&self.start, &self.end).unwrap_or(usize::MAX)
         } else {
@@ -579,7 +570,7 @@ impl<A: ~const Step + ~const Destruct> const RangeIteratorImpl for ops::Range<A>
         self.start =
             Step::forward_checked(self.start.clone(), taken).expect("`Step` invariants not upheld");
 
-        if taken < n { Err(taken) } else { Ok(()) }
+        NonZeroUsize::new(n - taken).map_or(Ok(()), Err)
     }
 
     #[inline]
@@ -608,7 +599,7 @@ impl<A: ~const Step + ~const Destruct> const RangeIteratorImpl for ops::Range<A>
     }
 
     #[inline]
-    default fn spec_advance_back_by(&mut self, n: usize) -> Result<(), usize> {
+    default fn spec_advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         let available = if self.start <= self.end {
             Step::steps_between(&self.start, &self.end).unwrap_or(usize::MAX)
         } else {
@@ -620,17 +611,18 @@ impl<A: ~const Step + ~const Destruct> const RangeIteratorImpl for ops::Range<A>
         self.end =
             Step::backward_checked(self.end.clone(), taken).expect("`Step` invariants not upheld");
 
-        if taken < n { Err(taken) } else { Ok(()) }
+        NonZeroUsize::new(n - taken).map_or(Ok(()), Err)
     }
 }
 
-impl<T: ~const TrustedStep + ~const Destruct> const RangeIteratorImpl for ops::Range<T> {
+impl<T: TrustedStep> RangeIteratorImpl for ops::Range<T> {
     #[inline]
     fn spec_next(&mut self) -> Option<T> {
         if self.start < self.end {
+            let old = self.start;
             // SAFETY: just checked precondition
-            let n = unsafe { Step::forward_unchecked(self.start.clone(), 1) };
-            Some(mem::replace(&mut self.start, n))
+            self.start = unsafe { Step::forward_unchecked(old, 1) };
+            Some(old)
         } else {
             None
         }
@@ -638,20 +630,20 @@ impl<T: ~const TrustedStep + ~const Destruct> const RangeIteratorImpl for ops::R
 
     #[inline]
     fn spec_nth(&mut self, n: usize) -> Option<T> {
-        if let Some(plus_n) = Step::forward_checked(self.start.clone(), n) {
+        if let Some(plus_n) = Step::forward_checked(self.start, n) {
             if plus_n < self.end {
                 // SAFETY: just checked precondition
-                self.start = unsafe { Step::forward_unchecked(plus_n.clone(), 1) };
+                self.start = unsafe { Step::forward_unchecked(plus_n, 1) };
                 return Some(plus_n);
             }
         }
 
-        self.start = self.end.clone();
+        self.start = self.end;
         None
     }
 
     #[inline]
-    fn spec_advance_by(&mut self, n: usize) -> Result<(), usize> {
+    fn spec_advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         let available = if self.start <= self.end {
             Step::steps_between(&self.start, &self.end).unwrap_or(usize::MAX)
         } else {
@@ -664,17 +656,17 @@ impl<T: ~const TrustedStep + ~const Destruct> const RangeIteratorImpl for ops::R
         // then steps_between either returns a bound to which we clamp or returns None which
         // together with the initial inequality implies more than usize::MAX steps.
         // Otherwise 0 is returned which always safe to use.
-        self.start = unsafe { Step::forward_unchecked(self.start.clone(), taken) };
+        self.start = unsafe { Step::forward_unchecked(self.start, taken) };
 
-        if taken < n { Err(taken) } else { Ok(()) }
+        NonZeroUsize::new(n - taken).map_or(Ok(()), Err)
     }
 
     #[inline]
     fn spec_next_back(&mut self) -> Option<T> {
         if self.start < self.end {
             // SAFETY: just checked precondition
-            self.end = unsafe { Step::backward_unchecked(self.end.clone(), 1) };
-            Some(self.end.clone())
+            self.end = unsafe { Step::backward_unchecked(self.end, 1) };
+            Some(self.end)
         } else {
             None
         }
@@ -682,20 +674,20 @@ impl<T: ~const TrustedStep + ~const Destruct> const RangeIteratorImpl for ops::R
 
     #[inline]
     fn spec_nth_back(&mut self, n: usize) -> Option<T> {
-        if let Some(minus_n) = Step::backward_checked(self.end.clone(), n) {
+        if let Some(minus_n) = Step::backward_checked(self.end, n) {
             if minus_n > self.start {
                 // SAFETY: just checked precondition
                 self.end = unsafe { Step::backward_unchecked(minus_n, 1) };
-                return Some(self.end.clone());
+                return Some(self.end);
             }
         }
 
-        self.end = self.start.clone();
+        self.end = self.start;
         None
     }
 
     #[inline]
-    fn spec_advance_back_by(&mut self, n: usize) -> Result<(), usize> {
+    fn spec_advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         let available = if self.start <= self.end {
             Step::steps_between(&self.start, &self.end).unwrap_or(usize::MAX)
         } else {
@@ -705,15 +697,14 @@ impl<T: ~const TrustedStep + ~const Destruct> const RangeIteratorImpl for ops::R
         let taken = available.min(n);
 
         // SAFETY: same as the spec_advance_by() implementation
-        self.end = unsafe { Step::backward_unchecked(self.end.clone(), taken) };
+        self.end = unsafe { Step::backward_unchecked(self.end, taken) };
 
-        if taken < n { Err(taken) } else { Ok(()) }
+        NonZeroUsize::new(n - taken).map_or(Ok(()), Err)
     }
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-impl<A: ~const Step + ~const Destruct> const Iterator for ops::Range<A> {
+impl<A: Step> Iterator for ops::Range<A> {
     type Item = A;
 
     #[inline]
@@ -742,12 +733,18 @@ impl<A: ~const Step + ~const Destruct> const Iterator for ops::Range<A> {
     }
 
     #[inline]
-    fn min(mut self) -> Option<A> {
+    fn min(mut self) -> Option<A>
+    where
+        A: Ord,
+    {
         self.next()
     }
 
     #[inline]
-    fn max(mut self) -> Option<A> {
+    fn max(mut self) -> Option<A>
+    where
+        A: Ord,
+    {
         self.next_back()
     }
 
@@ -757,7 +754,7 @@ impl<A: ~const Step + ~const Destruct> const Iterator for ops::Range<A> {
     }
 
     #[inline]
-    fn advance_by(&mut self, n: usize) -> Result<(), usize> {
+    fn advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         self.spec_advance_by(n)
     }
 
@@ -823,8 +820,7 @@ range_incl_exact_iter_impl! {
 }
 
 #[stable(feature = "rust1", since = "1.0.0")]
-#[rustc_const_unstable(feature = "const_iter", issue = "92476")]
-impl<A: ~const Step + ~const Destruct> const DoubleEndedIterator for ops::Range<A> {
+impl<A: Step> DoubleEndedIterator for ops::Range<A> {
     #[inline]
     fn next_back(&mut self) -> Option<A> {
         self.spec_next_back()
@@ -836,7 +832,7 @@ impl<A: ~const Step + ~const Destruct> const DoubleEndedIterator for ops::Range<
     }
 
     #[inline]
-    fn advance_back_by(&mut self, n: usize) -> Result<(), usize> {
+    fn advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         self.spec_advance_back_by(n)
     }
 }
@@ -1169,12 +1165,18 @@ impl<A: Step> Iterator for ops::RangeInclusive<A> {
     }
 
     #[inline]
-    fn min(mut self) -> Option<A> {
+    fn min(mut self) -> Option<A>
+    where
+        A: Ord,
+    {
         self.next()
     }
 
     #[inline]
-    fn max(mut self) -> Option<A> {
+    fn max(mut self) -> Option<A>
+    where
+        A: Ord,
+    {
         self.next_back()
     }
 

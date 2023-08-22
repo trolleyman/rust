@@ -10,7 +10,7 @@
 use core::cmp::{self, Ordering};
 use core::fmt;
 use core::hash::{Hash, Hasher};
-use core::iter::{repeat_n, repeat_with, ByRefSized, FromIterator};
+use core::iter::{repeat_n, repeat_with, ByRefSized};
 use core::mem::{ManuallyDrop, SizedTypeProperties};
 use core::ops::{Index, IndexMut, Range, RangeBounds};
 use core::ptr;
@@ -2283,21 +2283,21 @@ impl<T, A: Allocator> VecDeque<T, A> {
         unsafe { slice::from_raw_parts_mut(ptr.add(self.head), self.len) }
     }
 
-    /// Rotates the double-ended queue `mid` places to the left.
+    /// Rotates the double-ended queue `n` places to the left.
     ///
     /// Equivalently,
-    /// - Rotates item `mid` into the first position.
-    /// - Pops the first `mid` items and pushes them to the end.
-    /// - Rotates `len() - mid` places to the right.
+    /// - Rotates item `n` into the first position.
+    /// - Pops the first `n` items and pushes them to the end.
+    /// - Rotates `len() - n` places to the right.
     ///
     /// # Panics
     ///
-    /// If `mid` is greater than `len()`. Note that `mid == len()`
+    /// If `n` is greater than `len()`. Note that `n == len()`
     /// does _not_ panic and is a no-op rotation.
     ///
     /// # Complexity
     ///
-    /// Takes `*O*(min(mid, len() - mid))` time and no extra space.
+    /// Takes `*O*(min(n, len() - n))` time and no extra space.
     ///
     /// # Examples
     ///
@@ -2316,31 +2316,31 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     /// ```
     #[stable(feature = "vecdeque_rotate", since = "1.36.0")]
-    pub fn rotate_left(&mut self, mid: usize) {
-        assert!(mid <= self.len());
-        let k = self.len - mid;
-        if mid <= k {
-            unsafe { self.rotate_left_inner(mid) }
+    pub fn rotate_left(&mut self, n: usize) {
+        assert!(n <= self.len());
+        let k = self.len - n;
+        if n <= k {
+            unsafe { self.rotate_left_inner(n) }
         } else {
             unsafe { self.rotate_right_inner(k) }
         }
     }
 
-    /// Rotates the double-ended queue `k` places to the right.
+    /// Rotates the double-ended queue `n` places to the right.
     ///
     /// Equivalently,
-    /// - Rotates the first item into position `k`.
-    /// - Pops the last `k` items and pushes them to the front.
-    /// - Rotates `len() - k` places to the left.
+    /// - Rotates the first item into position `n`.
+    /// - Pops the last `n` items and pushes them to the front.
+    /// - Rotates `len() - n` places to the left.
     ///
     /// # Panics
     ///
-    /// If `k` is greater than `len()`. Note that `k == len()`
+    /// If `n` is greater than `len()`. Note that `n == len()`
     /// does _not_ panic and is a no-op rotation.
     ///
     /// # Complexity
     ///
-    /// Takes `*O*(min(k, len() - k))` time and no extra space.
+    /// Takes `*O*(min(n, len() - n))` time and no extra space.
     ///
     /// # Examples
     ///
@@ -2359,13 +2359,13 @@ impl<T, A: Allocator> VecDeque<T, A> {
     /// assert_eq!(buf, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     /// ```
     #[stable(feature = "vecdeque_rotate", since = "1.36.0")]
-    pub fn rotate_right(&mut self, k: usize) {
-        assert!(k <= self.len());
-        let mid = self.len - k;
-        if k <= mid {
-            unsafe { self.rotate_right_inner(k) }
+    pub fn rotate_right(&mut self, n: usize) {
+        assert!(n <= self.len());
+        let k = self.len - n;
+        if n <= k {
+            unsafe { self.rotate_right_inner(n) }
         } else {
-            unsafe { self.rotate_left_inner(mid) }
+            unsafe { self.rotate_left_inner(k) }
         }
     }
 
@@ -2394,7 +2394,8 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 
     /// Binary searches this `VecDeque` for a given element.
-    /// This behaves similarly to [`contains`] if this `VecDeque` is sorted.
+    /// If the `VecDeque` is not sorted, the returned result is unspecified and
+    /// meaningless.
     ///
     /// If the value is found then [`Result::Ok`] is returned, containing the
     /// index of the matching element. If there are multiple matches, then any
@@ -2404,7 +2405,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// See also [`binary_search_by`], [`binary_search_by_key`], and [`partition_point`].
     ///
-    /// [`contains`]: VecDeque::contains
     /// [`binary_search_by`]: VecDeque::binary_search_by
     /// [`binary_search_by_key`]: VecDeque::binary_search_by_key
     /// [`partition_point`]: VecDeque::partition_point
@@ -2450,12 +2450,13 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 
     /// Binary searches this `VecDeque` with a comparator function.
-    /// This behaves similarly to [`contains`] if this `VecDeque` is sorted.
     ///
-    /// The comparator function should implement an order consistent
-    /// with the sort order of the deque, returning an order code that
-    /// indicates whether its argument is `Less`, `Equal` or `Greater`
-    /// than the desired target.
+    /// The comparator function should return an order code that indicates
+    /// whether its argument is `Less`, `Equal` or `Greater` the desired
+    /// target.
+    /// If the `VecDeque` is not sorted or if the comparator function does not
+    /// implement an order consistent with the sort order of the underlying
+    /// `VecDeque`, the returned result is unspecified and meaningless.
     ///
     /// If the value is found then [`Result::Ok`] is returned, containing the
     /// index of the matching element. If there are multiple matches, then any
@@ -2465,7 +2466,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// See also [`binary_search`], [`binary_search_by_key`], and [`partition_point`].
     ///
-    /// [`contains`]: VecDeque::contains
     /// [`binary_search`]: VecDeque::binary_search
     /// [`binary_search_by_key`]: VecDeque::binary_search_by_key
     /// [`partition_point`]: VecDeque::partition_point
@@ -2505,10 +2505,11 @@ impl<T, A: Allocator> VecDeque<T, A> {
     }
 
     /// Binary searches this `VecDeque` with a key extraction function.
-    /// This behaves similarly to [`contains`] if this `VecDeque` is sorted.
     ///
     /// Assumes that the deque is sorted by the key, for instance with
     /// [`make_contiguous().sort_by_key()`] using the same key extraction function.
+    /// If the deque is not sorted by the key, the returned result is
+    /// unspecified and meaningless.
     ///
     /// If the value is found then [`Result::Ok`] is returned, containing the
     /// index of the matching element. If there are multiple matches, then any
@@ -2518,7 +2519,6 @@ impl<T, A: Allocator> VecDeque<T, A> {
     ///
     /// See also [`binary_search`], [`binary_search_by`], and [`partition_point`].
     ///
-    /// [`contains`]: VecDeque::contains
     /// [`make_contiguous().sort_by_key()`]: VecDeque::make_contiguous
     /// [`binary_search`]: VecDeque::binary_search
     /// [`binary_search_by`]: VecDeque::binary_search_by
@@ -2815,7 +2815,7 @@ impl<'a, T: 'a + Copy, A: Allocator> Extend<&'a T> for VecDeque<T, A> {
     }
 
     #[inline]
-    fn extend_one(&mut self, &elem: &T) {
+    fn extend_one(&mut self, &elem: &'a T) {
         self.push_back(elem);
     }
 

@@ -10,8 +10,8 @@
 //! before then or if I still haven't done that before January 2023.
 use super::StackDepth;
 use rustc_data_structures::fx::FxHashMap;
-use rustc_index::vec::IndexVec;
-use rustc_middle::traits::solve::{CanonicalGoal, QueryResult};
+use rustc_index::IndexVec;
+use rustc_middle::traits::solve::{CanonicalInput, QueryResult};
 
 rustc_index::newtype_index! {
     pub struct EntryIndex {}
@@ -19,22 +19,26 @@ rustc_index::newtype_index! {
 
 #[derive(Debug, Clone)]
 pub(super) struct ProvisionalEntry<'tcx> {
-    // In case we have a coinductive cycle, this is the
-    // the currently least restrictive result of this goal.
-    pub(super) response: QueryResult<'tcx>,
-    // In case of a cycle, the position of deepest stack entry involved
-    // in that cycle. This is monotonically decreasing in the stack as all
-    // elements between the current stack element in the deepest stack entry
-    // involved have to also be involved in that cycle.
-    //
-    // We can only move entries to the global cache once we're complete done
-    // with the cycle. If this entry has not been involved in a cycle,
-    // this is just its own depth.
+    /// In case we have a coinductive cycle, this is the
+    /// the current provisional result of this goal.
+    ///
+    /// This starts out as `None` for all goals and gets to some
+    /// when the goal gets popped from the stack or we rerun evaluation
+    /// for this goal to reach a fixpoint.
+    pub(super) response: Option<QueryResult<'tcx>>,
+    /// In case of a cycle, the position of deepest stack entry involved
+    /// in that cycle. This is monotonically decreasing in the stack as all
+    /// elements between the current stack element in the deepest stack entry
+    /// involved have to also be involved in that cycle.
+    ///
+    /// We can only move entries to the global cache once we're complete done
+    /// with the cycle. If this entry has not been involved in a cycle,
+    /// this is just its own depth.
     pub(super) depth: StackDepth,
 
-    // The goal for this entry. Should always be equal to the corresponding goal
-    // in the lookup table.
-    pub(super) goal: CanonicalGoal<'tcx>,
+    /// The goal for this entry. Should always be equal to the corresponding goal
+    /// in the lookup table.
+    pub(super) input: CanonicalInput<'tcx>,
 }
 
 pub(super) struct ProvisionalCache<'tcx> {
@@ -42,7 +46,7 @@ pub(super) struct ProvisionalCache<'tcx> {
     // FIXME: This is only used to quickly check whether a given goal
     // is in the cache. We should experiment with using something like
     // `SsoHashSet` here because in most cases there are only a few entries.
-    pub(super) lookup_table: FxHashMap<CanonicalGoal<'tcx>, EntryIndex>,
+    pub(super) lookup_table: FxHashMap<CanonicalInput<'tcx>, EntryIndex>,
 }
 
 impl<'tcx> ProvisionalCache<'tcx> {
@@ -92,7 +96,7 @@ impl<'tcx> ProvisionalCache<'tcx> {
         self.entries[entry_index].depth
     }
 
-    pub(super) fn provisional_result(&self, entry_index: EntryIndex) -> QueryResult<'tcx> {
+    pub(super) fn provisional_result(&self, entry_index: EntryIndex) -> Option<QueryResult<'tcx>> {
         self.entries[entry_index].response
     }
 }

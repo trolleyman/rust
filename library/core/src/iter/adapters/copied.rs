@@ -4,6 +4,7 @@ use crate::iter::adapters::{
 use crate::iter::{FusedIterator, TrustedLen};
 use crate::mem::MaybeUninit;
 use crate::mem::SizedTypeProperties;
+use crate::num::NonZeroUsize;
 use crate::ops::Try;
 use crate::{array, ptr};
 
@@ -89,7 +90,7 @@ where
     }
 
     #[inline]
-    fn advance_by(&mut self, n: usize) -> Result<(), usize> {
+    fn advance_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         self.it.advance_by(n)
     }
 
@@ -130,7 +131,7 @@ where
     }
 
     #[inline]
-    fn advance_back_by(&mut self, n: usize) -> Result<(), usize> {
+    fn advance_back_by(&mut self, n: usize) -> Result<(), NonZeroUsize> {
         self.it.advance_back_by(n)
     }
 }
@@ -241,7 +242,7 @@ where
     }
 }
 
-#[stable(feature = "default_iters", since = "CURRENT_RUSTC_VERSION")]
+#[stable(feature = "default_iters", since = "1.70.0")]
 impl<I: Default> Default for Copied<I> {
     /// Creates a `Copied` iterator from the default value of `I`
     /// ```

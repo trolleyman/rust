@@ -23,6 +23,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         p: &Path,
         param_mode: ParamMode,
         itctx: &ImplTraitContext,
+        // constness of the impl/bound if this is a trait path
+        constness: Option<ast::Const>,
     ) -> hir::QPath<'hir> {
         let qself_position = qself.as_ref().map(|q| q.position);
         let qself = qself.as_ref().map(|q| self.lower_ty(&q.ty, itctx));
@@ -51,7 +53,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     let parenthesized_generic_args = match base_res {
                         // `a::b::Trait(Args)`
                         Res::Def(DefKind::Trait, _) if i + 1 == proj_start => {
-                            ParenthesizedGenericArgs::Ok
+                            ParenthesizedGenericArgs::ParenSugar
                         }
                         // `a::b::Trait(Args)::TraitItem`
                         Res::Def(DefKind::AssocFn, _)
@@ -59,10 +61,10 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         | Res::Def(DefKind::AssocTy, _)
                             if i + 2 == proj_start =>
                         {
-                            ParenthesizedGenericArgs::Ok
+                            ParenthesizedGenericArgs::ParenSugar
                         }
                         // Avoid duplicated errors.
-                        Res::Err => ParenthesizedGenericArgs::Ok,
+                        Res::Err => ParenthesizedGenericArgs::ParenSugar,
                         // An error
                         _ => ParenthesizedGenericArgs::Err,
                     };
@@ -73,6 +75,8 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                         param_mode,
                         parenthesized_generic_args,
                         itctx,
+                        // if this is the last segment, add constness to the trait path
+                        if i == proj_start - 1 { constness } else { None },
                     )
                 },
             )),
@@ -119,6 +123,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 param_mode,
                 ParenthesizedGenericArgs::Err,
                 itctx,
+                None,
             ));
             let qpath = hir::QPath::TypeRelative(ty, hir_segment);
 
@@ -136,7 +141,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
 
         self.diagnostic().span_bug(
             p.span,
-            &format!(
+            format!(
                 "lower_qpath: no final extension segment in {}..{}",
                 proj_start,
                 p.segments.len()
@@ -159,6 +164,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                     param_mode,
                     ParenthesizedGenericArgs::Err,
                     &ImplTraitContext::Disallowed(ImplTraitPosition::Path),
+                    None,
                 )
             })),
             span: self.lower_span(p.span),
@@ -172,15 +178,16 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         param_mode: ParamMode,
         parenthesized_generic_args: ParenthesizedGenericArgs,
         itctx: &ImplTraitContext,
+        constness: Option<ast::Const>,
     ) -> hir::PathSegment<'hir> {
-        debug!("path_span: {:?}, lower_path_segment(segment: {:?})", path_span, segment,);
+        debug!("path_span: {:?}, lower_path_segment(segment: {:?})", path_span, segment);
         let (mut generic_args, infer_args) = if let Some(generic_args) = segment.args.as_deref() {
             match generic_args {
                 GenericArgs::AngleBracketed(data) => {
                     self.lower_angle_bracketed_parameter_data(data, param_mode, itctx)
                 }
                 GenericArgs::Parenthesized(data) => match parenthesized_generic_args {
-                    ParenthesizedGenericArgs::Ok => {
+                    ParenthesizedGenericArgs::ParenSugar => {
                         self.lower_parenthesized_parameter_data(data, itctx)
                     }
                     ParenthesizedGenericArgs::Err => {
@@ -224,16 +231,22 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
                 GenericArgsCtor {
                     args: Default::default(),
                     bindings: &[],
-                    parenthesized: false,
+                    parenthesized: hir::GenericArgsParentheses::No,
                     span: path_span.shrink_to_hi(),
                 },
                 param_mode == ParamMode::Optional,
             )
         };
 
+        if let Some(constness) = constness {
+            generic_args.push_constness(self, constness);
+        }
+
         let has_lifetimes =
             generic_args.args.iter().any(|arg| matches!(arg, GenericArg::Lifetime(_)));
-        if !generic_args.parenthesized && !has_lifetimes {
+
+        // FIXME(return_type_notation): Is this correct? I think so.
+        if generic_args.parenthesized != hir::GenericArgsParentheses::ParenSugar && !has_lifetimes {
             self.maybe_insert_elided_lifetimes_in_path(
                 path_span,
                 segment.id,
@@ -328,7 +341,12 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             AngleBracketedArg::Constraint(c) => Some(self.lower_assoc_ty_constraint(c, itctx)),
             AngleBracketedArg::Arg(_) => None,
         }));
-        let ctor = GenericArgsCtor { args, bindings, parenthesized: false, span: data.span };
+        let ctor = GenericArgsCtor {
+            args,
+            bindings,
+            parenthesized: hir::GenericArgsParentheses::No,
+            span: data.span,
+        };
         (ctor, !has_non_lt_args && param_mode == ParamMode::Optional)
     }
 
@@ -376,7 +394,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
             GenericArgsCtor {
                 args,
                 bindings: arena_vec![self; binding],
-                parenthesized: true,
+                parenthesized: hir::GenericArgsParentheses::ParenSugar,
                 span: data.inputs_span,
             },
             false,
@@ -396,7 +414,7 @@ impl<'a, 'hir> LoweringContext<'a, 'hir> {
         let gen_args = self.arena.alloc(hir::GenericArgs {
             args,
             bindings,
-            parenthesized: false,
+            parenthesized: hir::GenericArgsParentheses::No,
             span_ext: DUMMY_SP,
         });
         hir::TypeBinding {

@@ -10,8 +10,7 @@ use core::iter;
 use core::ops::ControlFlow;
 use rustc_errors::Applicability;
 use rustc_hir::def_id::DefIdSet;
-use rustc_hir::intravisit;
-use rustc_hir::{BinOpKind, Block, Expr, ExprKind, HirId, HirIdSet, Stmt, StmtKind};
+use rustc_hir::{intravisit, BinOpKind, Block, Expr, ExprKind, HirId, HirIdSet, Stmt, StmtKind};
 use rustc_lint::{LateContext, LateLintPass};
 use rustc_middle::query::Key;
 use rustc_session::{declare_tool_lint, impl_lint_pass};
@@ -591,7 +590,7 @@ fn lint_same_cond(cx: &LateContext<'_>, conds: &[&Expr<'_>], ignored_ty_ids: &De
         conds,
         |e| hash_expr(cx, e),
         |lhs, rhs| {
-            // Ignore eq_expr side effects iff one of the expressin kind is a method call
+            // Ignore eq_expr side effects iff one of the expression kind is a method call
             // and the caller is not a mutable, including inner mutable type.
             if let ExprKind::MethodCall(_, caller, _, _) = lhs.kind {
                 if method_caller_is_mutable(cx, caller, ignored_ty_ids) {

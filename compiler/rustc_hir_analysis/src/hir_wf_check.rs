@@ -4,7 +4,7 @@ use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{ForeignItem, ForeignItemKind};
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_infer::traits::{ObligationCause, WellFormedLoc};
-use rustc_middle::ty::query::Providers;
+use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, Region, TyCtxt, TypeFoldable, TypeFolder};
 use rustc_span::def_id::LocalDefId;
 use rustc_trait_selection::traits::{self, ObligationCtxt};
@@ -79,7 +79,7 @@ fn diagnostic_hir_wf_check<'tcx>(
                 self.tcx,
                 cause,
                 self.param_env,
-                ty::PredicateKind::WellFormed(tcx_ty.into()),
+                ty::PredicateKind::Clause(ty::ClauseKind::WellFormed(tcx_ty.into())),
             ));
 
             for error in ocx.select_all_or_error() {
@@ -128,7 +128,9 @@ fn diagnostic_hir_wf_check<'tcx>(
                 ref item => bug!("Unexpected TraitItem {:?}", item),
             },
             hir::Node::Item(item) => match item.kind {
-                hir::ItemKind::Static(ty, _, _) | hir::ItemKind::Const(ty, _) => vec![ty],
+                hir::ItemKind::TyAlias(ty, _)
+                | hir::ItemKind::Static(ty, _, _)
+                | hir::ItemKind::Const(ty, _, _) => vec![ty],
                 hir::ItemKind::Impl(impl_) => match &impl_.of_trait {
                     Some(t) => t
                         .path

@@ -159,7 +159,7 @@ impl Socket {
                 }
 
                 let mut timeout = c::timeval {
-                    tv_sec: timeout.as_secs() as c_long,
+                    tv_sec: cmp::min(timeout.as_secs(), c_long::MAX as u64) as c_long,
                     tv_usec: (timeout.subsec_nanos() / 1000) as c_long,
                 };
 
@@ -263,7 +263,7 @@ impl Socket {
                 &mut nread,
                 &mut flags,
                 ptr::null_mut(),
-                ptr::null_mut(),
+                None,
             )
         };
 
@@ -347,7 +347,7 @@ impl Socket {
                 &mut nwritten,
                 0,
                 ptr::null_mut(),
-                ptr::null_mut(),
+                None,
             )
         };
         cvt(result).map(|_| nwritten as usize)
@@ -446,6 +446,7 @@ impl<'a> Read for &'a Socket {
 }
 
 impl AsInner<OwnedSocket> for Socket {
+    #[inline]
     fn as_inner(&self) -> &OwnedSocket {
         &self.0
     }

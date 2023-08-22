@@ -6,8 +6,8 @@ use rustc_middle::ty::TyCtxt;
 use rustc_target::spec::PanicStrategy;
 
 /// A pass that removes noop landing pads and replaces jumps to them with
-/// `None`. This is important because otherwise LLVM generates terrible
-/// code for these.
+/// `UnwindAction::Continue`. This is important because otherwise LLVM generates
+/// terrible code for these.
 pub struct RemoveNoopLandingPads;
 
 impl<'tcx> MirPass<'tcx> for RemoveNoopLandingPads {
@@ -63,7 +63,7 @@ impl RemoveNoopLandingPads {
         let terminator = body[bb].terminator();
         match terminator.kind {
             TerminatorKind::Goto { .. }
-            | TerminatorKind::Resume
+            | TerminatorKind::UnwindResume
             | TerminatorKind::SwitchInt { .. }
             | TerminatorKind::FalseEdge { .. }
             | TerminatorKind::FalseUnwind { .. } => {
@@ -72,7 +72,7 @@ impl RemoveNoopLandingPads {
             TerminatorKind::GeneratorDrop
             | TerminatorKind::Yield { .. }
             | TerminatorKind::Return
-            | TerminatorKind::Abort
+            | TerminatorKind::UnwindTerminate
             | TerminatorKind::Unreachable
             | TerminatorKind::Call { .. }
             | TerminatorKind::Assert { .. }
@@ -84,7 +84,17 @@ impl RemoveNoopLandingPads {
     fn remove_nop_landing_pads(&self, body: &mut Body<'_>) {
         debug!("body: {:#?}", body);
 
-        // make sure there's a resume block
+        // Skip the pass if there are no blocks with a resume terminator.
+        let has_resume = body
+            .basic_blocks
+            .iter_enumerated()
+            .any(|(_bb, block)| matches!(block.terminator().kind, TerminatorKind::UnwindResume));
+        if !has_resume {
+            debug!("remove_noop_landing_pads: no resume block in MIR");
+            return;
+        }
+
+        // make sure there's a resume block without any statements
         let resume_block = {
             let mut patch = MirPatch::new(body);
             let resume_block = patch.resume_block();
@@ -103,11 +113,11 @@ impl RemoveNoopLandingPads {
         for bb in postorder {
             debug!("  processing {:?}", bb);
             if let Some(unwind) = body[bb].terminator_mut().unwind_mut() {
-                if let Some(unwind_bb) = *unwind {
+                if let UnwindAction::Cleanup(unwind_bb) = *unwind {
                     if nop_landing_pads.contains(unwind_bb) {
                         debug!("    removing noop landing pad");
                         landing_pads_removed += 1;
-                        *unwind = None;
+                        *unwind = UnwindAction::Continue;
                     }
                 }
             }

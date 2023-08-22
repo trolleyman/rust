@@ -1,5 +1,5 @@
 error: generator cannot be sent between threads safely
-  --> $DIR/issue-57017.rs:31:25
+  --> $DIR/issue-57017.rs:32:25
    |
 LL |               assert_send(g);
    |                           ^ generator is not `Send`
@@ -14,8 +14,9 @@ LL | |     );
    | |_____- in this macro invocation
    |
    = help: the trait `Sync` is not implemented for `copy::unsync::Client`
+   = note: consider using `std::sync::Arc<copy::unsync::Client>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: generator is not `Send` as this value is used across a yield
-  --> $DIR/issue-57017.rs:29:28
+  --> $DIR/issue-57017.rs:30:28
    |
 LL |               let g = move || match drop(&$name::unsync::Client::default()) {
    |                                          --------------------------------- has type `&copy::unsync::Client` which is not `Send`
@@ -33,14 +34,14 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
 note: required by a bound in `assert_send`
-  --> $DIR/issue-57017.rs:51:19
+  --> $DIR/issue-57017.rs:52:19
    |
 LL | fn assert_send<T: Send>(_thing: T) {}
    |                   ^^^^ required by this bound in `assert_send`
    = note: this error originates in the macro `type_combinations` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: generator cannot be sent between threads safely
-  --> $DIR/issue-57017.rs:43:25
+  --> $DIR/issue-57017.rs:44:25
    |
 LL |               assert_send(g);
    |                           ^ generator is not `Send`
@@ -54,9 +55,10 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
    |
-   = help: within `[generator@$DIR/issue-57017.rs:40:21: 40:28]`, the trait `Send` is not implemented for `copy::unsend::Client`
+   = help: within `[generator@$DIR/issue-57017.rs:41:21: 41:28]`, the trait `Send` is not implemented for `copy::unsend::Client`
+   = note: consider using `std::sync::Arc<copy::unsend::Client>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: generator is not `Send` as this value is used across a yield
-  --> $DIR/issue-57017.rs:41:28
+  --> $DIR/issue-57017.rs:42:28
    |
 LL |               let g = move || match drop($name::unsend::Client::default()) {
    |                                          -------------------------------- has type `copy::unsend::Client` which is not `Send`
@@ -74,14 +76,14 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
 note: required by a bound in `assert_send`
-  --> $DIR/issue-57017.rs:51:19
+  --> $DIR/issue-57017.rs:52:19
    |
 LL | fn assert_send<T: Send>(_thing: T) {}
    |                   ^^^^ required by this bound in `assert_send`
    = note: this error originates in the macro `type_combinations` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: generator cannot be sent between threads safely
-  --> $DIR/issue-57017.rs:31:25
+  --> $DIR/issue-57017.rs:32:25
    |
 LL |               assert_send(g);
    |                           ^ generator is not `Send`
@@ -96,8 +98,9 @@ LL | |     );
    | |_____- in this macro invocation
    |
    = help: the trait `Sync` is not implemented for `derived_drop::unsync::Client`
+   = note: consider using `std::sync::Arc<derived_drop::unsync::Client>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: generator is not `Send` as this value is used across a yield
-  --> $DIR/issue-57017.rs:29:28
+  --> $DIR/issue-57017.rs:30:28
    |
 LL |               let g = move || match drop(&$name::unsync::Client::default()) {
    |                                          --------------------------------- has type `&derived_drop::unsync::Client` which is not `Send`
@@ -115,14 +118,14 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
 note: required by a bound in `assert_send`
-  --> $DIR/issue-57017.rs:51:19
+  --> $DIR/issue-57017.rs:52:19
    |
 LL | fn assert_send<T: Send>(_thing: T) {}
    |                   ^^^^ required by this bound in `assert_send`
    = note: this error originates in the macro `type_combinations` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: generator cannot be sent between threads safely
-  --> $DIR/issue-57017.rs:43:25
+  --> $DIR/issue-57017.rs:44:25
    |
 LL |               assert_send(g);
    |                           ^ generator is not `Send`
@@ -136,9 +139,10 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
    |
-   = help: within `[generator@$DIR/issue-57017.rs:40:21: 40:28]`, the trait `Send` is not implemented for `derived_drop::unsend::Client`
+   = help: within `[generator@$DIR/issue-57017.rs:41:21: 41:28]`, the trait `Send` is not implemented for `derived_drop::unsend::Client`
+   = note: consider using `std::sync::Arc<derived_drop::unsend::Client>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: generator is not `Send` as this value is used across a yield
-  --> $DIR/issue-57017.rs:41:28
+  --> $DIR/issue-57017.rs:42:28
    |
 LL |               let g = move || match drop($name::unsend::Client::default()) {
    |                                          -------------------------------- has type `derived_drop::unsend::Client` which is not `Send`
@@ -156,14 +160,14 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
 note: required by a bound in `assert_send`
-  --> $DIR/issue-57017.rs:51:19
+  --> $DIR/issue-57017.rs:52:19
    |
 LL | fn assert_send<T: Send>(_thing: T) {}
    |                   ^^^^ required by this bound in `assert_send`
    = note: this error originates in the macro `type_combinations` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: generator cannot be sent between threads safely
-  --> $DIR/issue-57017.rs:31:25
+  --> $DIR/issue-57017.rs:32:25
    |
 LL |               assert_send(g);
    |                           ^ generator is not `Send`
@@ -178,8 +182,9 @@ LL | |     );
    | |_____- in this macro invocation
    |
    = help: the trait `Sync` is not implemented for `significant_drop::unsync::Client`
+   = note: consider using `std::sync::Arc<significant_drop::unsync::Client>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: generator is not `Send` as this value is used across a yield
-  --> $DIR/issue-57017.rs:29:28
+  --> $DIR/issue-57017.rs:30:28
    |
 LL |               let g = move || match drop(&$name::unsync::Client::default()) {
    |                                          --------------------------------- has type `&significant_drop::unsync::Client` which is not `Send`
@@ -197,14 +202,14 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
 note: required by a bound in `assert_send`
-  --> $DIR/issue-57017.rs:51:19
+  --> $DIR/issue-57017.rs:52:19
    |
 LL | fn assert_send<T: Send>(_thing: T) {}
    |                   ^^^^ required by this bound in `assert_send`
    = note: this error originates in the macro `type_combinations` (in Nightly builds, run with -Z macro-backtrace for more info)
 
 error: generator cannot be sent between threads safely
-  --> $DIR/issue-57017.rs:43:25
+  --> $DIR/issue-57017.rs:44:25
    |
 LL |               assert_send(g);
    |                           ^ generator is not `Send`
@@ -218,9 +223,10 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
    |
-   = help: within `[generator@$DIR/issue-57017.rs:40:21: 40:28]`, the trait `Send` is not implemented for `significant_drop::unsend::Client`
+   = help: within `[generator@$DIR/issue-57017.rs:41:21: 41:28]`, the trait `Send` is not implemented for `significant_drop::unsend::Client`
+   = note: consider using `std::sync::Arc<significant_drop::unsend::Client>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: generator is not `Send` as this value is used across a yield
-  --> $DIR/issue-57017.rs:41:28
+  --> $DIR/issue-57017.rs:42:28
    |
 LL |               let g = move || match drop($name::unsend::Client::default()) {
    |                                          -------------------------------- has type `significant_drop::unsend::Client` which is not `Send`
@@ -238,7 +244,7 @@ LL | |         }
 LL | |     );
    | |_____- in this macro invocation
 note: required by a bound in `assert_send`
-  --> $DIR/issue-57017.rs:51:19
+  --> $DIR/issue-57017.rs:52:19
    |
 LL | fn assert_send<T: Send>(_thing: T) {}
    |                   ^^^^ required by this bound in `assert_send`

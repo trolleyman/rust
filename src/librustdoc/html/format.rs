@@ -18,7 +18,7 @@ use rustc_data_structures::captures::Captures;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir as hir;
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LOCAL_CRATE};
 use rustc_metadata::creader::{CStore, LoadedMacro};
 use rustc_middle::ty;
 use rustc_middle::ty::TyCtxt;
@@ -109,6 +109,10 @@ impl Buffer {
         self.buffer
     }
 
+    pub(crate) fn push(&mut self, c: char) {
+        self.buffer.push(c);
+    }
+
     pub(crate) fn push_str(&mut self, s: &str) {
         self.buffer.push_str(s);
     }
@@ -134,10 +138,6 @@ impl Buffer {
     pub(crate) fn to_display<T: Print>(mut self, t: T) -> String {
         t.print(&mut self);
         self.into_inner()
-    }
-
-    pub(crate) fn is_for_html(&self) -> bool {
-        self.for_html
     }
 
     pub(crate) fn reserve(&mut self, additional: usize) {
@@ -171,7 +171,7 @@ pub(crate) fn print_generic_bounds<'a, 'tcx: 'a>(
     display_fn(move |f| {
         let mut bounds_dup = FxHashSet::default();
 
-        for (i, bound) in bounds.iter().filter(|b| bounds_dup.insert(b.clone())).enumerate() {
+        for (i, bound) in bounds.iter().filter(|b| bounds_dup.insert(*b)).enumerate() {
             if i > 0 {
                 f.write_str(" + ")?;
             }
@@ -232,9 +232,9 @@ impl clean::GenericParamDef {
 
                 if let Some(default) = default {
                     if f.alternate() {
-                        write!(f, " = {:#}", default)?;
+                        write!(f, " = {default:#}")?;
                     } else {
-                        write!(f, " = {}", default)?;
+                        write!(f, " = {default}")?;
                     }
                 }
 
@@ -307,13 +307,13 @@ pub(crate) fn print_where_clause<'a, 'tcx: 'a>(
                                 write!(
                                     f,
                                     "for<{:#}> {ty_cx:#}: {generic_bounds:#}",
-                                    comma_sep(bound_params.iter().map(|lt| lt.print()), true)
+                                    comma_sep(bound_params.iter().map(|lt| lt.print(cx)), true)
                                 )
                             } else {
                                 write!(
                                     f,
                                     "for&lt;{}&gt; {ty_cx}: {generic_bounds}",
-                                    comma_sep(bound_params.iter().map(|lt| lt.print()), true)
+                                    comma_sep(bound_params.iter().map(|lt| lt.print(cx)), true)
                                 )
                             }
                         }
@@ -351,13 +351,19 @@ pub(crate) fn print_where_clause<'a, 'tcx: 'a>(
             }
         } else {
             let mut br_with_padding = String::with_capacity(6 * indent + 28);
-            br_with_padding.push_str("\n");
+            br_with_padding.push('\n');
 
-            let padding_amout =
-                if ending == Ending::Newline { indent + 4 } else { indent + "fn where ".len() };
+            let where_indent = 3;
+            let padding_amount = if ending == Ending::Newline {
+                indent + 4
+            } else if indent == 0 {
+                4
+            } else {
+                indent + where_indent + "where ".len()
+            };
 
-            for _ in 0..padding_amout {
-                br_with_padding.push_str(" ");
+            for _ in 0..padding_amount {
+                br_with_padding.push(' ');
             }
             let where_preds = where_preds.to_string().replace('\n', &br_with_padding);
 
@@ -374,7 +380,8 @@ pub(crate) fn print_where_clause<'a, 'tcx: 'a>(
                     let where_preds = where_preds.replacen(&br_with_padding, " ", 1);
 
                     let mut clause = br_with_padding;
-                    clause.truncate(clause.len() - "where ".len());
+                    // +1 is for `\n`.
+                    clause.truncate(indent + 1 + where_indent);
 
                     write!(clause, "<span class=\"where\">where{where_preds}</span>")?;
                     clause
@@ -443,13 +450,14 @@ impl clean::GenericBound {
                 let modifier_str = match modifier {
                     hir::TraitBoundModifier::None => "",
                     hir::TraitBoundModifier::Maybe => "?",
+                    hir::TraitBoundModifier::Negative => "!",
                     // ~const is experimental; do not display those bounds in rustdoc
                     hir::TraitBoundModifier::MaybeConst => "",
                 };
                 if f.alternate() {
-                    write!(f, "{}{:#}", modifier_str, ty.print(cx))
+                    write!(f, "{modifier_str}{ty:#}", ty = ty.print(cx))
                 } else {
-                    write!(f, "{}{}", modifier_str, ty.print(cx))
+                    write!(f, "{modifier_str}{ty}", ty = ty.print(cx))
                 }
             }
         })
@@ -595,12 +603,12 @@ fn generate_macro_def_id_path(
     let cstore = CStore::from_tcx(tcx);
     // We need this to prevent a `panic` when this function is used from intra doc links...
     if !cstore.has_crate_data(def_id.krate) {
-        debug!("No data for crate {}", crate_name);
+        debug!("No data for crate {crate_name}");
         return Err(HrefError::NotInExternalCache);
     }
     // Check to see if it is a macro 2.0 or built-in macro.
     // More information in <https://rust-lang.github.io/rfcs/1584-macros.html>.
-    let is_macro_2 = match cstore.load_macro_untracked(def_id, tcx.sess) {
+    let is_macro_2 = match cstore.load_macro_untracked(def_id, tcx) {
         LoadedMacro::MacroDef(def, _) => {
             // If `ast_def.macro_rules` is `true`, then it's not a macro 2.0.
             matches!(&def.kind, ast::ItemKind::MacroDef(ast_def) if !ast_def.macro_rules)
@@ -627,19 +635,18 @@ fn generate_macro_def_id_path(
     let url = match cache.extern_locations[&def_id.krate] {
         ExternalLocation::Remote(ref s) => {
             // `ExternalLocation::Remote` always end with a `/`.
-            format!("{}{}", s, path.iter().map(|p| p.as_str()).join("/"))
+            format!("{s}{path}", path = path.iter().map(|p| p.as_str()).join("/"))
         }
         ExternalLocation::Local => {
             // `root_path` always end with a `/`.
             format!(
-                "{}{}/{}",
-                root_path.unwrap_or(""),
-                crate_name,
-                path.iter().map(|p| p.as_str()).join("/")
+                "{root_path}{crate_name}/{path}",
+                root_path = root_path.unwrap_or(""),
+                path = path.iter().map(|p| p.as_str()).join("/")
             )
         }
         ExternalLocation::Unknown => {
-            debug!("crate {} not in cache when linkifying macros", crate_name);
+            debug!("crate {crate_name} not in cache when linkifying macros");
             return Err(HrefError::NotInExternalCache);
         }
     };
@@ -657,6 +664,14 @@ pub(crate) fn href_with_root_path(
         DefKind::AssocTy | DefKind::AssocFn | DefKind::AssocConst | DefKind::Variant => {
             // documented on their parent's page
             tcx.parent(did)
+        }
+        DefKind::ExternCrate => {
+            // Link to the crate itself, not the `extern crate` item.
+            if let Some(local_did) = did.as_local() {
+                tcx.extern_mod_stmt_cnum(local_did).unwrap_or(LOCAL_CRATE).as_def_id()
+            } else {
+                did
+            }
         }
         _ => did,
     };
@@ -720,7 +735,7 @@ pub(crate) fn href_with_root_path(
         _ => {
             let prefix = shortty.as_str();
             let last = fqp.last().unwrap();
-            url_parts.push_fmt(format_args!("{}.{}.html", prefix, last));
+            url_parts.push_fmt(format_args!("{prefix}.{last}.html"));
         }
     }
     Ok((url_parts.finish(), shortty, fqp.to_vec()))
@@ -767,9 +782,10 @@ pub(crate) fn href_relative_parts<'fqp>(
 
 pub(crate) fn link_tooltip(did: DefId, fragment: &Option<UrlFragment>, cx: &Context<'_>) -> String {
     let cache = cx.cache();
-    let Some((fqp, shortty)) = cache.paths.get(&did)
-        .or_else(|| cache.external_paths.get(&did))
-        else { return String::new() };
+    let Some((fqp, shortty)) = cache.paths.get(&did).or_else(|| cache.external_paths.get(&did))
+    else {
+        return String::new();
+    };
     let mut buf = Buffer::new();
     let fqp = if *shortty == ItemType::Primitive {
         // primitives are documented in a crate, but not actually part of it
@@ -815,9 +831,9 @@ fn resolved_path<'cx>(
         let path = if use_absolute {
             if let Ok((_, _, fqp)) = href(did, cx) {
                 format!(
-                    "{}::{}",
-                    join_with_double_colon(&fqp[..fqp.len() - 1]),
-                    anchor(did, *fqp.last().unwrap(), cx)
+                    "{path}::{anchor}",
+                    path = join_with_double_colon(&fqp[..fqp.len() - 1]),
+                    anchor = anchor(did, *fqp.last().unwrap(), cx)
                 )
             } else {
                 last.name.to_string()
@@ -825,7 +841,7 @@ fn resolved_path<'cx>(
         } else {
             anchor(did, last.name, cx).to_string()
         };
-        write!(w, "{}{}", path, last.args.print(cx))?;
+        write!(w, "{path}{args}", args = last.args.print(cx))?;
     }
     Ok(())
 }
@@ -893,7 +909,7 @@ fn primitive_link_fragment(
             None => {}
         }
     }
-    write!(f, "{}", name)?;
+    f.write_str(name)?;
     if needs_termination {
         write!(f, "</a>")?;
     }
@@ -933,15 +949,11 @@ pub(crate) fn anchor<'a, 'cx: 'a>(
         if let Ok((url, short_ty, fqp)) = parts {
             write!(
                 f,
-                r#"<a class="{}" href="{}" title="{} {}">{}</a>"#,
-                short_ty,
-                url,
-                short_ty,
-                join_with_double_colon(&fqp),
-                text.as_str()
+                r#"<a class="{short_ty}" href="{url}" title="{short_ty} {path}">{text}</a>"#,
+                path = join_with_double_colon(&fqp),
             )
         } else {
-            write!(f, "{}", text)
+            f.write_str(text.as_str())
         }
     })
 }
@@ -952,10 +964,10 @@ fn fmt_type<'cx>(
     use_absolute: bool,
     cx: &'cx Context<'_>,
 ) -> fmt::Result {
-    trace!("fmt_type(t = {:?})", t);
+    trace!("fmt_type(t = {t:?})");
 
     match *t {
-        clean::Generic(name) => write!(f, "{}", name),
+        clean::Generic(name) => f.write_str(name.as_str()),
         clean::Type::Path { ref path } => {
             // Paths like `T::Output` and `Self::Output` should be rendered with all segments.
             let did = path.def_id();
@@ -1072,13 +1084,13 @@ fn fmt_type<'cx>(
 
             if matches!(**t, clean::Generic(_)) || t.is_assoc_ty() {
                 let text = if f.alternate() {
-                    format!("*{} {:#}", m, t.print(cx))
+                    format!("*{m} {ty:#}", ty = t.print(cx))
                 } else {
-                    format!("*{} {}", m, t.print(cx))
+                    format!("*{m} {ty}", ty = t.print(cx))
                 };
                 primitive_link(f, clean::PrimitiveType::RawPointer, &text, cx)
             } else {
-                primitive_link(f, clean::PrimitiveType::RawPointer, &format!("*{} ", m), cx)?;
+                primitive_link(f, clean::PrimitiveType::RawPointer, &format!("*{m} "), cx)?;
                 fmt::Display::fmt(&t.print(cx), f)
             }
         }
@@ -1089,22 +1101,35 @@ fn fmt_type<'cx>(
             };
             let m = mutability.print_with_space();
             let amp = if f.alternate() { "&" } else { "&amp;" };
-            match **ty {
+
+            if let clean::Generic(name) = **ty {
+                return primitive_link(
+                    f,
+                    PrimitiveType::Reference,
+                    &format!("{amp}{lt}{m}{name}"),
+                    cx,
+                );
+            }
+
+            write!(f, "{amp}{lt}{m}")?;
+
+            let needs_parens = match **ty {
                 clean::DynTrait(ref bounds, ref trait_lt)
                     if bounds.len() > 1 || trait_lt.is_some() =>
                 {
-                    write!(f, "{}{}{}(", amp, lt, m)?;
-                    fmt_type(ty, f, use_absolute, cx)?;
-                    write!(f, ")")
+                    true
                 }
-                clean::Generic(name) => {
-                    primitive_link(f, PrimitiveType::Reference, &format!("{amp}{lt}{m}{name}"), cx)
-                }
-                _ => {
-                    write!(f, "{}{}{}", amp, lt, m)?;
-                    fmt_type(ty, f, use_absolute, cx)
-                }
+                clean::ImplTrait(ref bounds) if bounds.len() > 1 => true,
+                _ => false,
+            };
+            if needs_parens {
+                f.write_str("(")?;
             }
+            fmt_type(ty, f, use_absolute, cx)?;
+            if needs_parens {
+                f.write_str(")")?;
+            }
+            Ok(())
         }
         clean::ImplTrait(ref bounds) => {
             if f.alternate() {
@@ -1119,14 +1144,17 @@ fn fmt_type<'cx>(
             ref trait_,
             should_show_cast,
         }) => {
+            // FIXME(inherent_associated_types): Once we support non-ADT self-types (#106719),
+            // we need to surround them with angle brackets in some cases (e.g. `<dyn …>::P`).
+
             if f.alternate() {
-                if should_show_cast {
+                if let Some(trait_) = trait_ && should_show_cast {
                     write!(f, "<{:#} as {:#}>::", self_type.print(cx), trait_.print(cx))?
                 } else {
                     write!(f, "{:#}::", self_type.print(cx))?
                 }
             } else {
-                if should_show_cast {
+                if let Some(trait_) = trait_ && should_show_cast {
                     write!(f, "&lt;{} as {}&gt;::", self_type.print(cx), trait_.print(cx))?
                 } else {
                     write!(f, "{}::", self_type.print(cx))?
@@ -1142,22 +1170,42 @@ fn fmt_type<'cx>(
             //        the ugliness comes from inlining across crates where
             //        everything comes in as a fully resolved QPath (hard to
             //        look at).
-            match href(trait_.def_id(), cx) {
-                Ok((ref url, _, ref path)) if !f.alternate() => {
+            if !f.alternate() {
+                // FIXME(inherent_associated_types): We always link to the very first associated
+                // type (in respect to source order) that bears the given name (`assoc.name`) and that is
+                // affiliated with the computed `DefId`. This is obviously incorrect when we have
+                // multiple impl blocks. Ideally, we would thread the `DefId` of the assoc ty itself
+                // through here and map it to the corresponding HTML ID that was generated by
+                // `render::Context::derive_id` when the impl blocks were rendered.
+                // There is no such mapping unfortunately.
+                // As a hack, we could badly imitate `derive_id` here by keeping *count* when looking
+                // for the assoc ty `DefId` in `tcx.associated_items(self_ty_did).in_definition_order()`
+                // considering privacy, `doc(hidden)`, etc.
+                // I don't feel like that right now :cold_sweat:.
+
+                let parent_href = match trait_ {
+                    Some(trait_) => href(trait_.def_id(), cx).ok(),
+                    None => self_type.def_id(cx.cache()).and_then(|did| href(did, cx).ok()),
+                };
+
+                if let Some((url, _, path)) = parent_href {
                     write!(
                         f,
                         "<a class=\"associatedtype\" href=\"{url}#{shortty}.{name}\" \
-                                    title=\"type {path}::{name}\">{name}</a>{args}",
-                        url = url,
+                                    title=\"type {path}::{name}\">{name}</a>",
                         shortty = ItemType::AssocType,
                         name = assoc.name,
-                        path = join_with_double_colon(path),
-                        args = assoc.args.print(cx),
-                    )?;
+                        path = join_with_double_colon(&path),
+                    )
+                } else {
+                    write!(f, "{}", assoc.name)
                 }
-                _ => write!(f, "{}{:#}", assoc.name, assoc.args.print(cx))?,
-            }
-            Ok(())
+            } else {
+                write!(f, "{}", assoc.name)
+            }?;
+
+            // Carry `f.alternate()` into this display w/o branching manually.
+            fmt::Display::fmt(&assoc.args.print(cx), f)
         }
     }
 }
@@ -1237,9 +1285,9 @@ impl clean::Impl {
                 };
                 primitive_link_fragment(f, PrimitiveType::Tuple, &format!("fn ({name}₁, {name}₂, …, {name}ₙ{ellipsis})"), "#trait-implementations-1", cx)?;
                 // Write output.
-                if let clean::FnRetTy::Return(ty) = &bare_fn.decl.output {
+                if !bare_fn.decl.output.is_unit() {
                     write!(f, " -> ")?;
-                    fmt_type(ty, f, use_absolute, cx)?;
+                    fmt_type(&bare_fn.decl.output, f, use_absolute, cx)?;
                 }
             } else if let Some(ty) = self.kind.as_blanket_ty() {
                 fmt_type(ty, f, use_absolute, cx)?;
@@ -1272,22 +1320,6 @@ impl clean::Arguments {
                 }
             }
             Ok(())
-        })
-    }
-}
-
-impl clean::FnRetTy {
-    pub(crate) fn print<'a, 'tcx: 'a>(
-        &'a self,
-        cx: &'a Context<'tcx>,
-    ) -> impl fmt::Display + 'a + Captures<'tcx> {
-        display_fn(move |f| match self {
-            clean::Return(clean::Tuple(tys)) if tys.is_empty() => Ok(()),
-            clean::Return(ty) if f.alternate() => {
-                write!(f, " -> {:#}", ty.print(cx))
-            }
-            clean::Return(ty) => write!(f, " -&gt; {}", ty.print(cx)),
-            clean::DefaultReturn => Ok(()),
         })
     }
 }
@@ -1346,7 +1378,7 @@ impl clean::FnDecl {
                     "({args:#}{ellipsis}){arrow:#}",
                     args = self.inputs.print(cx),
                     ellipsis = ellipsis,
-                    arrow = self.output.print(cx)
+                    arrow = self.print_output(cx)
                 )
             } else {
                 write!(
@@ -1354,7 +1386,7 @@ impl clean::FnDecl {
                     "({args}{ellipsis}){arrow}",
                     args = self.inputs.print(cx),
                     ellipsis = ellipsis,
-                    arrow = self.output.print(cx)
+                    arrow = self.print_output(cx)
                 )
             }
         })
@@ -1397,7 +1429,7 @@ impl clean::FnDecl {
         let amp = if f.alternate() { "&" } else { "&amp;" };
 
         write!(f, "(")?;
-        if let Some(n) = line_wrapping_indent {
+        if let Some(n) = line_wrapping_indent && !self.inputs.values.is_empty() {
             write!(f, "\n{}", Indent(n + 4))?;
         }
         for (i, input) in self.inputs.values.iter().enumerate() {
@@ -1412,11 +1444,20 @@ impl clean::FnDecl {
                     clean::SelfValue => {
                         write!(f, "self")?;
                     }
-                    clean::SelfBorrowed(Some(ref lt), mtbl) => {
-                        write!(f, "{}{} {}self", amp, lt.print(), mtbl.print_with_space())?;
+                    clean::SelfBorrowed(Some(ref lt), mutability) => {
+                        write!(
+                            f,
+                            "{amp}{lifetime} {mutability}self",
+                            lifetime = lt.print(),
+                            mutability = mutability.print_with_space(),
+                        )?;
                     }
-                    clean::SelfBorrowed(None, mtbl) => {
-                        write!(f, "{}{}self", amp, mtbl.print_with_space())?;
+                    clean::SelfBorrowed(None, mutability) => {
+                        write!(
+                            f,
+                            "{amp}{mutability}self",
+                            mutability = mutability.print_with_space(),
+                        )?;
                     }
                     clean::SelfExplicit(ref typ) => {
                         write!(f, "self: ")?;
@@ -1444,8 +1485,21 @@ impl clean::FnDecl {
             Some(n) => write!(f, "\n{})", Indent(n))?,
         };
 
-        fmt::Display::fmt(&self.output.print(cx), f)?;
+        fmt::Display::fmt(&self.print_output(cx), f)?;
         Ok(())
+    }
+
+    fn print_output<'a, 'tcx: 'a>(
+        &'a self,
+        cx: &'a Context<'tcx>,
+    ) -> impl fmt::Display + 'a + Captures<'tcx> {
+        display_fn(move |f| match &self.output {
+            clean::Tuple(tys) if tys.is_empty() => Ok(()),
+            ty if f.alternate() => {
+                write!(f, " -> {:#}", ty.print(cx))
+            }
+            ty => write!(f, " -&gt; {}", ty.print(cx)),
+        })
     }
 }
 
@@ -1477,7 +1531,7 @@ pub(crate) fn visibility_print_with_space<'a, 'tcx: 'a>(
                 "pub(super) ".into()
             } else {
                 let path = cx.tcx().def_path(vis_did);
-                debug!("path={:?}", path);
+                debug!("path={path:?}");
                 // modified from `resolved_path()` to work with `DefPathData`
                 let last_name = path.data.last().unwrap().data.get_opt_name().unwrap();
                 let anchor = anchor(vis_did, last_name, cx);
@@ -1486,12 +1540,12 @@ pub(crate) fn visibility_print_with_space<'a, 'tcx: 'a>(
                 for seg in &path.data[..path.data.len() - 1] {
                     let _ = write!(s, "{}::", seg.data.get_opt_name().unwrap());
                 }
-                let _ = write!(s, "{}) ", anchor);
+                let _ = write!(s, "{anchor}) ");
                 s.into()
             }
         }
     };
-    display_fn(move |f| write!(f, "{}", to_print))
+    display_fn(move |f| f.write_str(&to_print))
 }
 
 /// This function is the same as print_with_space, except that it renders no links.
@@ -1586,7 +1640,7 @@ impl clean::Import {
                 if name == self.source.path.last() {
                     write!(f, "use {};", self.source.print(cx))
                 } else {
-                    write!(f, "use {} as {};", self.source.print(cx), name)
+                    write!(f, "use {source} as {name};", source = self.source.print(cx))
                 }
             }
             clean::ImportKind::Glob => {
@@ -1615,7 +1669,7 @@ impl clean::ImportSource {
                 if let hir::def::Res::PrimTy(p) = self.path.res {
                     primitive_link(f, PrimitiveType::from(p), name.as_str(), cx)?;
                 } else {
-                    write!(f, "{}", name)?;
+                    f.write_str(name.as_str())?;
                 }
                 Ok(())
             }

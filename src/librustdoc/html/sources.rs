@@ -2,7 +2,6 @@ use crate::clean;
 use crate::docfs::PathError;
 use crate::error::Error;
 use crate::html::format;
-use crate::html::format::Buffer;
 use crate::html::highlight;
 use crate::html::layout;
 use crate::html::render::Context;
@@ -17,6 +16,7 @@ use rustc_span::source_map::FileName;
 
 use std::cell::RefCell;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::ops::RangeInclusive;
 use std::path::{Component, Path, PathBuf};
@@ -145,10 +145,9 @@ impl DocVisitor for SourceCollector<'_, '_> {
                 Err(e) => {
                     self.cx.shared.tcx.sess.span_err(
                         span,
-                        &format!(
-                            "failed to render source code for `{}`: {}",
-                            filename.prefer_local(),
-                            e,
+                        format!(
+                            "failed to render source code for `{filename}`: {e}",
+                            filename = filename.prefer_local(),
                         ),
                     );
                     false
@@ -227,7 +226,7 @@ impl SourceCollector<'_, '_> {
         let desc = format!("Source of the Rust file `{}`.", filename.prefer_remapped());
         let page = layout::Page {
             title: &title,
-            css_class: "source",
+            css_class: "src",
             root_path: &root_path,
             static_root_path: shared.static_root_path.as_deref(),
             description: &desc,
@@ -294,7 +293,7 @@ pub(crate) enum SourceContext {
 /// Wrapper struct to render the source code of a file. This will do things like
 /// adding line numbers to the left-hand side.
 pub(crate) fn print_src(
-    buf: &mut Buffer,
+    mut writer: impl fmt::Write,
     s: &str,
     file_span: rustc_span::Span,
     context: &Context<'_>,
@@ -329,5 +328,5 @@ pub(crate) fn print_src(
         );
         Ok(())
     });
-    Source { embedded, needs_expansion, lines, code_html: code }.render_into(buf).unwrap();
+    Source { embedded, needs_expansion, lines, code_html: code }.render_into(&mut writer).unwrap();
 }

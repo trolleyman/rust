@@ -35,7 +35,7 @@ impl OwnerId {
     }
 }
 
-impl rustc_index::vec::Idx for OwnerId {
+impl rustc_index::Idx for OwnerId {
     #[inline]
     fn new(idx: usize) -> Self {
         OwnerId { def_id: LocalDefId { local_def_index: DefIndex::from_usize(idx) } }
@@ -116,10 +116,7 @@ impl HirId {
     }
 
     pub fn index(self) -> (usize, usize) {
-        (
-            rustc_index::vec::Idx::index(self.owner.def_id),
-            rustc_index::vec::Idx::index(self.local_id),
-        )
+        (rustc_index::Idx::index(self.owner.def_id), rustc_index::Idx::index(self.local_id))
     }
 }
 
@@ -169,7 +166,9 @@ impl ItemLocalId {
 
 // Safety: Ord is implement as just comparing the ItemLocalId's numerical
 // values and these are not changed by (de-)serialization.
-unsafe impl StableOrd for ItemLocalId {}
+unsafe impl StableOrd for ItemLocalId {
+    const CAN_USE_UNSTABLE_SORT: bool = true;
+}
 
 /// The `HirId` corresponding to `CRATE_NODE_ID` and `CRATE_DEF_ID`.
 pub const CRATE_HIR_ID: HirId =

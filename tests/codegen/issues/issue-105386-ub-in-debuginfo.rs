@@ -1,5 +1,5 @@
-// compile-flags: --crate-type=lib -O -Cdebuginfo=2 -Cno-prepopulate-passes
-// min-llvm-version: 15.0 # this test uses opaque pointer notation
+// compile-flags: --crate-type=lib -O -Cdebuginfo=2 -Cno-prepopulate-passes -Zmir-enable-passes=-ScalarReplacementOfAggregates
+// MIR SROA will decompose the closure
 #![feature(stmt_expr_attributes)]
 
 pub struct S([usize; 8]);
@@ -19,4 +19,5 @@ pub fn outer_function(x: S, y: S) -> usize {
 // CHECK-NOT: [[ptr_tmp:%.*]] = getelementptr inbounds %"[closure@{{.*.rs}}:9:23: 9:25]", ptr [[spill]]
 // CHECK-NOT: [[load:%.*]] = load ptr, ptr
 // CHECK: call void @llvm.lifetime.start{{.*}}({{.*}}, ptr [[spill]])
-// CHECK: call void @llvm.memcpy{{.*}}(ptr {{align .*}} [[spill]], ptr {{align .*}} %x
+// CHECK: [[inner:%.*]] = getelementptr inbounds %"{{.*}}", ptr [[spill]]
+// CHECK: call void @llvm.memcpy{{.*}}(ptr {{align .*}} [[inner]], ptr {{align .*}} %x

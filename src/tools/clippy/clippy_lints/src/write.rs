@@ -104,7 +104,7 @@ declare_clippy_lint! {
 
 declare_clippy_lint! {
     /// ### What it does
-    /// Checks for use of `Debug` formatting. The purpose of this
+    /// Checks for usage of `Debug` formatting. The purpose of this
     /// lint is to catch debugging remnants.
     ///
     /// ### Why is this bad?
@@ -272,9 +272,15 @@ impl<'tcx> LateLintPass<'tcx> for Write {
     }
 
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>) {
-        let Some(macro_call) = root_macro_call_first_node(cx, expr) else { return };
-        let Some(diag_name) = cx.tcx.get_diagnostic_name(macro_call.def_id) else { return };
-        let Some(name) = diag_name.as_str().strip_suffix("_macro") else { return };
+        let Some(macro_call) = root_macro_call_first_node(cx, expr) else {
+            return;
+        };
+        let Some(diag_name) = cx.tcx.get_diagnostic_name(macro_call.def_id) else {
+            return;
+        };
+        let Some(name) = diag_name.as_str().strip_suffix("_macro") else {
+            return;
+        };
 
         let is_build_script = cx
             .sess()
@@ -343,7 +349,9 @@ fn is_debug_impl(cx: &LateContext<'_>, item: &Item<'_>) -> bool {
 }
 
 fn check_newline(cx: &LateContext<'_>, format_args: &FormatArgs, macro_call: &MacroCall, name: &str) {
-    let Some(FormatArgsPiece::Literal(last)) = format_args.template.last() else { return };
+    let Some(FormatArgsPiece::Literal(last)) = format_args.template.last() else {
+        return;
+    };
 
     let count_vertical_whitespace = || {
         format_args
@@ -379,7 +387,9 @@ fn check_newline(cx: &LateContext<'_>, format_args: &FormatArgs, macro_call: &Ma
             &format!("using `{name}!()` with a format string that ends in a single newline"),
             |diag| {
                 let name_span = cx.sess().source_map().span_until_char(macro_call.span, '!');
-                let Some(format_snippet) = snippet_opt(cx, format_string_span) else { return };
+                let Some(format_snippet) = snippet_opt(cx, format_string_span) else {
+                    return;
+                };
 
                 if format_args.template.len() == 1 && last.as_str() == "\n" {
                     // print!("\n"), write!(f, "\n")
@@ -463,12 +473,18 @@ fn check_literal(cx: &LateContext<'_>, format_args: &FormatArgs, name: &str) {
             && let Some(value_string) = snippet_opt(cx, arg.expr.span)
     {
             let (replacement, replace_raw) = match lit.kind {
-                LitKind::Str | LitKind::StrRaw(_)  => extract_str_literal(&value_string),
+                LitKind::Str | LitKind::StrRaw(_)  => match extract_str_literal(&value_string) {
+                    Some(extracted) => extracted,
+                    None => return,
+                },
                 LitKind::Char => (
                     match lit.symbol.as_str() {
                         "\"" => "\\\"",
                         "\\'" => "'",
-                        _ => &value_string[1..value_string.len() - 1],
+                        _ => match value_string.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')) {
+                            Some(stripped) => stripped,
+                            None => return,
+                        },
                     }
                     .to_string(),
                     false,
@@ -516,7 +532,7 @@ fn check_literal(cx: &LateContext<'_>, format_args: &FormatArgs, name: &str) {
                     {
                         let replacement = replacement.replace('{', "{{").replace('}', "}}");
                         diag.multipart_suggestion(
-                            "try this",
+                            "try",
                             vec![(*placeholder_span, replacement), (removal_span, String::new())],
                             Applicability::MachineApplicable,
                         );
@@ -533,13 +549,13 @@ fn check_literal(cx: &LateContext<'_>, format_args: &FormatArgs, name: &str) {
 /// `r#"a"#` -> (`a`, true)
 ///
 /// `"b"` -> (`b`, false)
-fn extract_str_literal(literal: &str) -> (String, bool) {
+fn extract_str_literal(literal: &str) -> Option<(String, bool)> {
     let (literal, raw) = match literal.strip_prefix('r') {
         Some(stripped) => (stripped.trim_matches('#'), true),
         None => (literal, false),
     };
 
-    (literal[1..literal.len() - 1].to_string(), raw)
+    Some((literal.strip_prefix('"')?.strip_suffix('"')?.to_string(), raw))
 }
 
 enum UnescapeErr {

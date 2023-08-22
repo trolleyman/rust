@@ -1,6 +1,7 @@
 use super::*;
 use crate::cmp::Ordering::{self, Equal, Greater, Less};
 use crate::intrinsics::{self, const_eval_select};
+use crate::mem::SizedTypeProperties;
 use crate::slice::{self, SliceIndex};
 
 impl<T: ?Sized> *mut T {
@@ -29,6 +30,7 @@ impl<T: ?Sized> *mut T {
     /// ```
     #[stable(feature = "rust1", since = "1.0.0")]
     #[rustc_const_unstable(feature = "const_ptr_is_null", issue = "74939")]
+    #[rustc_diagnostic_item = "ptr_is_null"]
     #[inline]
     pub const fn is_null(self) -> bool {
         #[inline]
@@ -53,6 +55,7 @@ impl<T: ?Sized> *mut T {
     /// Casts to a pointer of another type.
     #[stable(feature = "ptr_cast", since = "1.38.0")]
     #[rustc_const_stable(feature = "const_ptr_cast", since = "1.38.0")]
+    #[rustc_diagnostic_item = "ptr_cast"]
     #[inline(always)]
     pub const fn cast<U>(self) -> *mut U {
         self as _
@@ -109,6 +112,7 @@ impl<T: ?Sized> *mut T {
     /// [`cast_mut`]: #method.cast_mut
     #[stable(feature = "ptr_const_cast", since = "1.65.0")]
     #[rustc_const_stable(feature = "ptr_const_cast", since = "1.65.0")]
+    #[rustc_diagnostic_item = "ptr_cast_const"]
     #[inline(always)]
     pub const fn cast_const(self) -> *const T {
         self as _
@@ -138,8 +142,8 @@ impl<T: ?Sized> *mut T {
     /// ```
     #[unstable(feature = "ptr_to_from_bits", issue = "91126")]
     #[deprecated(
-        since = "1.67",
-        note = "replaced by the `exposed_addr` method, or update your code \
+        since = "1.67.0",
+        note = "replaced by the `expose_addr` method, or update your code \
             to follow the strict provenance rules using its APIs"
     )]
     #[inline(always)]
@@ -167,7 +171,7 @@ impl<T: ?Sized> *mut T {
     /// ```
     #[unstable(feature = "ptr_to_from_bits", issue = "91126")]
     #[deprecated(
-        since = "1.67",
+        since = "1.67.0",
         note = "replaced by the `ptr::from_exposed_addr_mut` function, or \
             update your code to follow the strict provenance rules using its APIs"
     )]
@@ -270,7 +274,7 @@ impl<T: ?Sized> *mut T {
         let dest_addr = addr as isize;
         let offset = dest_addr.wrapping_sub(self_addr);
 
-        // This is the canonical desugarring of this operation
+        // This is the canonical desugaring of this operation
         self.wrapping_byte_offset(offset)
     }
 
@@ -476,7 +480,7 @@ impl<T: ?Sized> *mut T {
         // SAFETY: the caller must uphold the safety contract for `offset`.
         // The obtained pointer is valid for writes since the caller must
         // guarantee that it points to the same allocated object as `self`.
-        unsafe { intrinsics::offset(self, count) as *mut T }
+        unsafe { intrinsics::offset(self, count) }
     }
 
     /// Calculates the offset from a pointer in bytes.
@@ -1017,7 +1021,7 @@ impl<T: ?Sized> *mut T {
         T: Sized,
     {
         // SAFETY: the caller must uphold the safety contract for `offset`.
-        unsafe { self.offset(count as isize) }
+        unsafe { intrinsics::offset(self, count) }
     }
 
     /// Calculates the offset from a pointer in bytes (convenience for `.byte_offset(count as isize)`).
@@ -1093,14 +1097,23 @@ impl<T: ?Sized> *mut T {
     #[stable(feature = "pointer_methods", since = "1.26.0")]
     #[must_use = "returns a new pointer rather than modifying its argument"]
     #[rustc_const_stable(feature = "const_ptr_offset", since = "1.61.0")]
+    // We could always go back to wrapping if unchecked becomes unacceptable
+    #[rustc_allow_const_fn_unstable(const_int_unchecked_arith)]
     #[inline(always)]
     #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn sub(self, count: usize) -> Self
     where
         T: Sized,
     {
-        // SAFETY: the caller must uphold the safety contract for `offset`.
-        unsafe { self.offset((count as isize).wrapping_neg()) }
+        if T::IS_ZST {
+            // Pointer arithmetic does nothing when the pointee is a ZST.
+            self
+        } else {
+            // SAFETY: the caller must uphold the safety contract for `offset`.
+            // Because the pointee is *not* a ZST, that means that `count` is
+            // at most `isize::MAX`, and thus the negation cannot overflow.
+            unsafe { self.offset(intrinsics::unchecked_sub(0, count as isize)) }
+        }
     }
 
     /// Calculates the offset from a pointer in bytes (convenience for
@@ -1287,7 +1300,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// [`ptr::read`]: crate::ptr::read()
     #[stable(feature = "pointer_methods", since = "1.26.0")]
-    #[rustc_const_unstable(feature = "const_ptr_read", issue = "80377")]
+    #[rustc_const_stable(feature = "const_ptr_read", since = "1.71.0")]
     #[inline(always)]
     #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn read(self) -> T
@@ -1328,7 +1341,7 @@ impl<T: ?Sized> *mut T {
     ///
     /// [`ptr::read_unaligned`]: crate::ptr::read_unaligned()
     #[stable(feature = "pointer_methods", since = "1.26.0")]
-    #[rustc_const_unstable(feature = "const_ptr_read", issue = "80377")]
+    #[rustc_const_stable(feature = "const_ptr_read", since = "1.71.0")]
     #[inline(always)]
     #[cfg_attr(miri, track_caller)] // even without panics, this helps for Miri backtraces
     pub const unsafe fn read_unaligned(self) -> T
@@ -2036,11 +2049,10 @@ impl<T> *mut [T] {
     /// }
     /// ```
     #[unstable(feature = "slice_ptr_get", issue = "74265")]
-    #[rustc_const_unstable(feature = "const_slice_index", issue = "none")]
     #[inline(always)]
-    pub const unsafe fn get_unchecked_mut<I>(self, index: I) -> *mut I::Output
+    pub unsafe fn get_unchecked_mut<I>(self, index: I) -> *mut I::Output
     where
-        I: ~const SliceIndex<[T]>,
+        I: SliceIndex<[T]>,
     {
         // SAFETY: the caller ensures that `self` is dereferenceable and `index` in-bounds.
         unsafe { index.get_unchecked_mut(self) }

@@ -4,7 +4,7 @@ use rustc_errors::error_code;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{DefId, LocalDefId, CRATE_DEF_ID, LOCAL_CRATE};
 use rustc_hir::{ItemId, Node, CRATE_HIR_ID};
-use rustc_middle::ty::query::Providers;
+use rustc_middle::query::Providers;
 use rustc_middle::ty::TyCtxt;
 use rustc_session::config::{sigpipe, CrateType, EntryFnType};
 use rustc_session::parse::feature_err;
@@ -31,7 +31,7 @@ struct EntryContext<'tcx> {
 }
 
 fn entry_fn(tcx: TyCtxt<'_>, (): ()) -> Option<(DefId, EntryFnType)> {
-    let any_exe = tcx.sess.crate_types().iter().any(|ty| *ty == CrateType::Executable);
+    let any_exe = tcx.crate_types().iter().any(|ty| *ty == CrateType::Executable);
     if !any_exe {
         // No need to find a main function.
         return None;
@@ -187,12 +187,6 @@ fn sigpipe(tcx: TyCtxt<'_>, def_id: DefId) -> u8 {
 
 fn no_main_err(tcx: TyCtxt<'_>, visitor: &EntryContext<'_>) {
     let sp = tcx.def_span(CRATE_DEF_ID);
-    if *tcx.sess.parse_sess.reached_eof.borrow() {
-        // There's an unclosed brace that made the parser reach `Eof`, we shouldn't complain about
-        // the missing `fn main()` then as it might have been hidden inside an unclosed block.
-        tcx.sess.delay_span_bug(sp, "`main` not found, but expected unclosed brace error");
-        return;
-    }
 
     // There is no main function.
     let mut has_filename = true;
@@ -206,7 +200,7 @@ fn no_main_err(tcx: TyCtxt<'_>, visitor: &EntryContext<'_>) {
     // The file may be empty, which leads to the diagnostic machinery not emitting this
     // note. This is a relatively simple way to detect that case and emit a span-less
     // note instead.
-    let file_empty = !tcx.sess.source_map().lookup_line(sp.hi()).is_ok();
+    let file_empty = tcx.sess.source_map().lookup_line(sp.hi()).is_err();
 
     tcx.sess.emit_err(NoMainErr {
         sp,

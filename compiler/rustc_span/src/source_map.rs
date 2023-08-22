@@ -13,8 +13,10 @@ pub use crate::hygiene::{ExpnData, ExpnKind};
 pub use crate::*;
 
 use rustc_data_structures::fx::FxHashMap;
-use rustc_data_structures::stable_hasher::StableHasher;
-use rustc_data_structures::sync::{AtomicU32, Lrc, MappedReadGuard, ReadGuard, RwLock};
+use rustc_data_structures::stable_hasher::{Hash128, Hash64, StableHasher};
+use rustc_data_structures::sync::{
+    AtomicU32, IntoDynSyncSend, Lrc, MappedReadGuard, ReadGuard, RwLock,
+};
 use std::cmp;
 use std::hash::Hash;
 use std::path::{self, Path, PathBuf};
@@ -138,7 +140,7 @@ impl FileLoader for RealFileLoader {
 pub struct StableSourceFileId {
     /// A hash of the source file's [`FileName`]. This is hash so that it's size
     /// is more predictable than if we included the actual [`FileName`] value.
-    pub file_name_hash: u64,
+    pub file_name_hash: Hash64,
 
     /// The [`CrateNum`] of the crate this source file was originally parsed for.
     /// We cannot include this information in the hash because at the time
@@ -176,7 +178,7 @@ pub struct SourceMap {
     used_address_space: AtomicU32,
 
     files: RwLock<SourceMapFiles>,
-    file_loader: Box<dyn FileLoader + Sync + Send>,
+    file_loader: IntoDynSyncSend<Box<dyn FileLoader + Sync + Send>>,
     // This is used to apply the file path remapping as specified via
     // `--remap-path-prefix` to all `SourceFile`s allocated within this `SourceMap`.
     path_mapping: FilePathMapping,
@@ -202,7 +204,7 @@ impl SourceMap {
         SourceMap {
             used_address_space: AtomicU32::new(0),
             files: Default::default(),
-            file_loader,
+            file_loader: IntoDynSyncSend(file_loader),
             path_mapping,
             hash_kind,
         }
@@ -331,7 +333,7 @@ impl SourceMap {
         &self,
         filename: FileName,
         src_hash: SourceFileHash,
-        name_hash: u128,
+        name_hash: Hash128,
         source_len: usize,
         cnum: CrateNum,
         file_local_lines: Lock<SourceFileLines>,
@@ -483,7 +485,7 @@ impl SourceMap {
         self.span_to_string(sp, FileNameDisplayPreference::Remapped)
     }
 
-    /// Format the span location suitable for pretty printing anotations with relative line numbers
+    /// Format the span location suitable for pretty printing annotations with relative line numbers
     pub fn span_to_relative_line_string(&self, sp: Span, relative_to: Span) -> String {
         if self.files.borrow().source_files.is_empty() || sp.is_dummy() || relative_to.is_dummy() {
             return "no-location".to_string();
@@ -542,10 +544,10 @@ impl SourceMap {
         let hi = self.lookup_char_pos(sp.hi());
         trace!(?hi);
         if lo.file.start_pos != hi.file.start_pos {
-            return Err(SpanLinesError::DistinctSources(DistinctSources {
+            return Err(SpanLinesError::DistinctSources(Box::new(DistinctSources {
                 begin: (lo.file.name.clone(), lo.file.start_pos),
                 end: (hi.file.name.clone(), hi.file.start_pos),
-            }));
+            })));
         }
         Ok((lo, hi))
     }
@@ -603,10 +605,10 @@ impl SourceMap {
         let local_end = self.lookup_byte_offset(sp.hi());
 
         if local_begin.sf.start_pos != local_end.sf.start_pos {
-            Err(SpanSnippetError::DistinctSources(DistinctSources {
+            Err(SpanSnippetError::DistinctSources(Box::new(DistinctSources {
                 begin: (local_begin.sf.name.clone(), local_begin.sf.start_pos),
                 end: (local_end.sf.name.clone(), local_end.sf.start_pos),
-            }))
+            })))
         } else {
             self.ensure_source_file_source_present(local_begin.sf.clone());
 
@@ -637,7 +639,7 @@ impl SourceMap {
         self.span_to_source(sp, |src, start_index, end_index| {
             Ok(src.get(start_index..end_index).is_some())
         })
-        .map_or(false, |is_accessible| is_accessible)
+        .is_ok_and(|is_accessible| is_accessible)
     }
 
     /// Returns the source snippet as `String` corresponding to the given `Span`.
@@ -742,6 +744,21 @@ impl SourceMap {
         })
     }
 
+    /// Extends the given `Span` to previous character while the previous character matches the predicate
+    pub fn span_extend_prev_while(
+        &self,
+        span: Span,
+        f: impl Fn(char) -> bool,
+    ) -> Result<Span, SpanSnippetError> {
+        self.span_to_source(span, |s, start, _end| {
+            let n = s[..start]
+                .char_indices()
+                .rfind(|&(_, c)| !f(c))
+                .map_or(start, |(i, _)| start - i - 1);
+            Ok(span.with_lo(span.lo() - BytePos(n as u32)))
+        })
+    }
+
     /// Extends the given `Span` to just before the next occurrence of `c`.
     pub fn span_extend_to_next_char(&self, sp: Span, c: char, accept_newlines: bool) -> Span {
         if let Ok(next_source) = self.span_to_next_source(sp) {
@@ -777,7 +794,7 @@ impl SourceMap {
 
     /// Given a 'Span', tries to tell if it's wrapped by "<>" or "()"
     /// the algorithm searches if the next character is '>' or ')' after skipping white space
-    /// then searches the previous charactoer to match '<' or '(' after skipping white space
+    /// then searches the previous character to match '<' or '(' after skipping white space
     /// return true if wrapped by '<>' or '()'
     pub fn span_wrapped_by_angle_or_parentheses(&self, span: Span) -> bool {
         self.span_to_source(span, |src, start_index, end_index| {
@@ -833,7 +850,7 @@ impl SourceMap {
             }
             return Ok(true);
         })
-        .map_or(false, |is_accessible| is_accessible)
+        .is_ok_and(|is_accessible| is_accessible)
     }
 
     /// Given a `Span`, tries to get a shorter span ending just after the first occurrence of `char`
@@ -906,10 +923,8 @@ impl SourceMap {
 
             let snippet = if let Some(ref src) = local_begin.sf.src {
                 Some(&src[start_index..])
-            } else if let Some(src) = src.get_source() {
-                Some(&src[start_index..])
             } else {
-                None
+                src.get_source().map(|src| &src[start_index..])
             };
 
             match snippet {
@@ -958,24 +973,21 @@ impl SourceMap {
         Span::new(BytePos(start_of_next_point), end_of_next_point, sp.ctxt(), None)
     }
 
-    /// Returns a new span to check next none-whitespace character or some specified expected character
-    /// If `expect` is none, the first span of non-whitespace character is returned.
-    /// If `expect` presented, the first span of the character `expect` is returned
-    /// Otherwise, the span reached to limit is returned.
-    pub fn span_look_ahead(&self, span: Span, expect: Option<&str>, limit: Option<usize>) -> Span {
+    /// Check whether span is followed by some specified expected string in limit scope
+    pub fn span_look_ahead(&self, span: Span, expect: &str, limit: Option<usize>) -> Option<Span> {
         let mut sp = span;
         for _ in 0..limit.unwrap_or(100_usize) {
             sp = self.next_point(sp);
             if let Ok(ref snippet) = self.span_to_snippet(sp) {
-                if expect.map_or(false, |es| snippet == es) {
-                    break;
+                if snippet == expect {
+                    return Some(sp);
                 }
-                if expect.is_none() && snippet.chars().any(|c| !c.is_whitespace()) {
+                if snippet.chars().any(|c| !c.is_whitespace()) {
                     break;
                 }
             }
         }
-        sp
+        None
     }
 
     /// Finds the width of the character, either before or after the end of provided span,
@@ -1019,36 +1031,19 @@ impl SourceMap {
 
         let src = local_begin.sf.external_src.borrow();
 
-        // We need to extend the snippet to the end of the src rather than to end_index so when
-        // searching forwards for boundaries we've got somewhere to search.
-        let snippet = if let Some(ref src) = local_begin.sf.src {
-            &src[start_index..]
+        let snippet = if let Some(src) = &local_begin.sf.src {
+            src
         } else if let Some(src) = src.get_source() {
-            &src[start_index..]
+            src
         } else {
             return 1;
         };
-        debug!("snippet=`{:?}`", snippet);
 
-        let mut target = if forwards { end_index + 1 } else { end_index - 1 };
-        debug!("initial target=`{:?}`", target);
-
-        while !snippet.is_char_boundary(target - start_index) && target < source_len {
-            target = if forwards {
-                target + 1
-            } else {
-                match target.checked_sub(1) {
-                    Some(target) => target,
-                    None => {
-                        break;
-                    }
-                }
-            };
-            debug!("target=`{:?}`", target);
+        if forwards {
+            (snippet.ceil_char_boundary(end_index + 1) - end_index) as u32
+        } else {
+            (end_index - snippet.floor_char_boundary(end_index - 1)) as u32
         }
-        debug!("final target=`{:?}`", target);
-
-        if forwards { (target - end_index) as u32 } else { (end_index - target) as u32 }
     }
 
     pub fn get_source_file(&self, filename: &FileName) -> Option<Lrc<SourceFile>> {
@@ -1074,11 +1069,7 @@ impl SourceMap {
     /// This index is guaranteed to be valid for the lifetime of this `SourceMap`,
     /// since `source_files` is a `MonotonicVec`
     pub fn lookup_source_file_idx(&self, pos: BytePos) -> usize {
-        self.files
-            .borrow()
-            .source_files
-            .binary_search_by_key(&pos, |key| key.start_pos)
-            .unwrap_or_else(|p| p - 1)
+        self.files.borrow().source_files.partition_point(|x| x.start_pos <= pos) - 1
     }
 
     pub fn count_lines(&self) -> usize {

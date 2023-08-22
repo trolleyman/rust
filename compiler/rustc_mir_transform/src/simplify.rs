@@ -29,20 +29,38 @@
 
 use crate::MirPass;
 use rustc_data_structures::fx::{FxHashSet, FxIndexSet};
-use rustc_index::vec::{Idx, IndexVec};
+use rustc_index::{Idx, IndexSlice, IndexVec};
 use rustc_middle::mir::coverage::*;
 use rustc_middle::mir::visit::{MutVisitor, MutatingUseContext, PlaceContext, Visitor};
 use rustc_middle::mir::*;
 use rustc_middle::ty::TyCtxt;
 use smallvec::SmallVec;
 
-pub struct SimplifyCfg {
-    label: String,
+pub enum SimplifyCfg {
+    Initial,
+    PromoteConsts,
+    RemoveFalseEdges,
+    EarlyOpt,
+    ElaborateDrops,
+    Final,
+    MakeShim,
+    AfterUninhabitedEnumBranching,
 }
 
 impl SimplifyCfg {
-    pub fn new(label: &str) -> Self {
-        SimplifyCfg { label: format!("SimplifyCfg-{}", label) }
+    pub fn name(&self) -> &'static str {
+        match self {
+            SimplifyCfg::Initial => "SimplifyCfg-initial",
+            SimplifyCfg::PromoteConsts => "SimplifyCfg-promote-consts",
+            SimplifyCfg::RemoveFalseEdges => "SimplifyCfg-remove-false-edges",
+            SimplifyCfg::EarlyOpt => "SimplifyCfg-early-opt",
+            SimplifyCfg::ElaborateDrops => "SimplifyCfg-elaborate-drops",
+            SimplifyCfg::Final => "SimplifyCfg-final",
+            SimplifyCfg::MakeShim => "SimplifyCfg-make_shim",
+            SimplifyCfg::AfterUninhabitedEnumBranching => {
+                "SimplifyCfg-after-uninhabited-enum-branching"
+            }
+        }
     }
 }
 
@@ -56,18 +74,18 @@ pub fn simplify_cfg<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
 }
 
 impl<'tcx> MirPass<'tcx> for SimplifyCfg {
-    fn name(&self) -> &str {
-        &self.label
+    fn name(&self) -> &'static str {
+        &self.name()
     }
 
     fn run_pass(&self, tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
-        debug!("SimplifyCfg({:?}) - simplifying {:?}", self.label, body.source);
+        debug!("SimplifyCfg({:?}) - simplifying {:?}", self.name(), body.source);
         simplify_cfg(tcx, body);
     }
 }
 
 pub struct CfgSimplifier<'a, 'tcx> {
-    basic_blocks: &'a mut IndexVec<BasicBlock, BasicBlockData<'tcx>>,
+    basic_blocks: &'a mut IndexSlice<BasicBlock, BasicBlockData<'tcx>>,
     pred_count: IndexVec<BasicBlock, u32>,
 }
 
@@ -181,7 +199,8 @@ impl<'a, 'tcx> CfgSimplifier<'a, 'tcx> {
         let last = current;
         *start = last;
         while let Some((current, mut terminator)) = terminators.pop() {
-            let Terminator { kind: TerminatorKind::Goto { ref mut target }, .. } = terminator else {
+            let Terminator { kind: TerminatorKind::Goto { ref mut target }, .. } = terminator
+            else {
                 unreachable!();
             };
             *changed |= *target != last;
@@ -260,6 +279,18 @@ impl<'a, 'tcx> CfgSimplifier<'a, 'tcx> {
     }
 }
 
+pub fn simplify_duplicate_switch_targets(terminator: &mut Terminator<'_>) {
+    if let TerminatorKind::SwitchInt { targets, .. } = &mut terminator.kind {
+        let otherwise = targets.otherwise();
+        if targets.iter().any(|t| t.1 == otherwise) {
+            *targets = SwitchTargets::new(
+                targets.iter().filter(|t| t.1 != otherwise),
+                targets.otherwise(),
+            );
+        }
+    }
+}
+
 pub fn remove_duplicate_unreachable_blocks<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
     struct OptApplier<'tcx> {
         tcx: TyCtxt<'tcx>,
@@ -279,6 +310,8 @@ pub fn remove_duplicate_unreachable_blocks<'tcx>(tcx: TyCtxt<'tcx>, body: &mut B
                     *target = self.duplicates[0];
                 }
             }
+
+            simplify_duplicate_switch_targets(terminator);
 
             self.super_terminator(terminator, location);
         }
@@ -369,8 +402,8 @@ pub fn remove_dead_blocks<'tcx>(tcx: TyCtxt<'tcx>, body: &mut Body<'tcx>) {
 /// instances in a single body, so the strategy described above is applied to
 /// coverage counters from each instance individually.
 fn save_unreachable_coverage(
-    basic_blocks: &mut IndexVec<BasicBlock, BasicBlockData<'_>>,
-    source_scopes: &IndexVec<SourceScope, SourceScopeData<'_>>,
+    basic_blocks: &mut IndexSlice<BasicBlock, BasicBlockData<'_>>,
+    source_scopes: &IndexSlice<SourceScope, SourceScopeData<'_>>,
     first_dead_block: usize,
 ) {
     // Identify instances that still have some live coverage counters left.
@@ -423,19 +456,17 @@ fn save_unreachable_coverage(
     ));
 }
 
-pub struct SimplifyLocals {
-    label: String,
-}
-
-impl SimplifyLocals {
-    pub fn new(label: &str) -> SimplifyLocals {
-        SimplifyLocals { label: format!("SimplifyLocals-{}", label) }
-    }
+pub enum SimplifyLocals {
+    BeforeConstProp,
+    Final,
 }
 
 impl<'tcx> MirPass<'tcx> for SimplifyLocals {
-    fn name(&self) -> &str {
-        &self.label
+    fn name(&self) -> &'static str {
+        match &self {
+            SimplifyLocals::BeforeConstProp => "SimplifyLocals-before-const-prop",
+            SimplifyLocals::Final => "SimplifyLocals-final",
+        }
     }
 
     fn is_enabled(&self, sess: &rustc_session::Session) -> bool {
@@ -489,7 +520,7 @@ fn make_local_map<V>(
     local_decls: &mut IndexVec<Local, V>,
     used_locals: &UsedLocals,
 ) -> IndexVec<Local, Option<Local>> {
-    let mut map: IndexVec<Local, Option<Local>> = IndexVec::from_elem(None, &*local_decls);
+    let mut map: IndexVec<Local, Option<Local>> = IndexVec::from_elem(None, local_decls);
     let mut used = Local::new(0);
 
     for alive_index in local_decls.indices() {
