@@ -86,7 +86,7 @@ where
     match mode {
         Mode::Char | Mode::Byte => {
             let mut chars = src.chars();
-            let res = unescape_char_or_byte(&mut chars, mode);
+            let res = unescape_char_or_byte(&mut chars, mode == Mode::Byte);
             callback(0..(src.len() - chars.as_str().len()), res);
         }
         Mode::Str | Mode::ByteStr | Mode::FStr => unescape_str_common(src, mode, callback),
@@ -134,13 +134,13 @@ where
 /// Takes a contents of a char literal (without quotes), and returns an
 /// unescaped char or an error.
 pub fn unescape_char(src: &str) -> Result<char, EscapeError> {
-    unescape_char_or_byte(&mut src.chars(), Mode::Char)
+    unescape_char_or_byte(&mut src.chars(), false)
 }
 
 /// Takes a contents of a byte literal (without quotes), and returns an
 /// unescaped byte or an error.
 pub fn unescape_byte(src: &str) -> Result<u8, EscapeError> {
-    unescape_char_or_byte(&mut src.chars(), Mode::Byte).map(byte_from_char)
+    unescape_char_or_byte(&mut src.chars(), true).map(byte_from_char)
 }
 
 /// What kind of literal do we parse.
@@ -174,7 +174,7 @@ impl Mode {
     /// Non-byte literals should have `\xXX` escapes that are within the ASCII range.
     pub fn ascii_escapes_should_be_ascii(self) -> bool {
         match self {
-            Mode::Char | Mode::Str | Mode::RawStr => true,
+            Mode::Char | Mode::Str | Mode::RawStr | Mode::FStr => true,
             Mode::Byte | Mode::ByteStr | Mode::RawByteStr | Mode::CStr | Mode::RawCStr => false,
         }
     }
@@ -204,6 +204,7 @@ impl Mode {
             Mode::Byte | Mode::ByteStr | Mode::RawByteStr => "b",
             Mode::CStr | Mode::RawCStr => "c",
             Mode::Char | Mode::Str | Mode::RawStr => "",
+            Mode::FStr => "f",
         }
     }
 }
@@ -213,6 +214,8 @@ fn scan_escape<T: From<u8> + From<char>>(
     mode: Mode,
 ) -> Result<T, EscapeError> {
     // Previous character was '\\', unescape what follows.
+    let second_char = chars.next().ok_or(EscapeError::LoneSlash)?;
+
     let res = match chars.next().ok_or(EscapeError::LoneSlash)? {
         '"' => b'"',
         'n' => b'\n',
@@ -245,7 +248,7 @@ fn scan_escape<T: From<u8> + From<char>>(
             if mode != Mode::FStr {
                 return Err(EscapeError::InvalidEscape);
             }
-            second_char
+            return Ok(second_char.into());
         }
         _ => return Err(EscapeError::InvalidEscape),
     };
@@ -318,13 +321,13 @@ fn ascii_check(c: char, characters_should_be_ascii: bool) -> Result<char, Escape
     }
 }
 
-fn unescape_char_or_byte(chars: &mut Chars<'_>, mode: Mode) -> Result<char, EscapeError> {
+fn unescape_char_or_byte(chars: &mut Chars<'_>, is_byte: bool) -> Result<char, EscapeError> {
     let c = chars.next().ok_or(EscapeError::ZeroChars)?;
     let res = match c {
         '\\' => scan_escape(chars, if is_byte { Mode::Byte } else { Mode::Char }),
         '\n' | '\t' | '\'' => Err(EscapeError::EscapeOnlyChar),
         '\r' => Err(EscapeError::BareCarriageReturn),
-        _ => ascii_check(c, mode.is_byte()),
+        _ => ascii_check(c, is_byte),
     }?;
     if chars.next().is_some() {
         return Err(EscapeError::MoreThanOneChar);
@@ -368,7 +371,7 @@ where
                 match chars.next() {
                     None => Err(EscapeError::LoneBrace),
                     Some(next_char) if next_char != c => Err(EscapeError::LoneBrace), // TODO: Improve error?
-                    Some(_) => Ok(c),
+                    Some(_) => Ok(c.into()),
                 }
             }
             _ => ascii_check(c, mode.characters_should_be_ascii()).map(Into::into),
@@ -408,7 +411,7 @@ where
 /// sequence of characters or errors.
 /// NOTE: Raw strings do not perform any explicit character escaping, here we
 /// only produce errors on bare CR.
-fn unescape_raw_str_or_raw_byte_str<F>(src: &str, mode: Mode, callback: &mut F)
+fn unescape_raw_str_or_raw_byte_str<F>(src: &str, is_byte: bool, callback: &mut F)
 where
     F: FnMut(Range<usize>, Result<char, EscapeError>),
 {
@@ -421,7 +424,7 @@ where
         let start = src.len() - chars.as_str().len() - c.len_utf8();
         let res = match c {
             '\r' => Err(EscapeError::BareCarriageReturnInRawString),
-            _ => ascii_check(c, mode.is_byte()),
+            _ => ascii_check(c, is_byte),
         };
         let end = src.len() - chars.as_str().len();
         callback(start..end, res);

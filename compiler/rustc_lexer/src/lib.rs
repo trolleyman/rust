@@ -586,11 +586,11 @@ impl<'a> Lexer<'a> {
         mk_kind_raw: impl FnOnce(Option<u8>) -> LiteralKind,
         single_quoted: Option<fn(bool) -> LiteralKind>,
     ) -> TokenKind {
-        match (self.first(), self.second(), single_quoted) {
+        match (self.cursor.first(), self.cursor.second(), single_quoted) {
             ('\'', _, Some(mk_kind)) => {
-                self.bump();
+                self.cursor.bump();
                 let terminated = self.single_quoted_string();
-                let suffix_start = self.pos_within_token();
+                let suffix_start = self.cursor.pos_within_token();
                 if terminated {
                     self.eat_literal_suffix();
                 }
@@ -598,9 +598,9 @@ impl<'a> Lexer<'a> {
                 Literal { kind, suffix_start }
             }
             ('"', _, _) => {
-                self.bump();
+                self.cursor.bump();
                 let terminated = self.double_quoted_string();
-                let suffix_start = self.pos_within_token();
+                let suffix_start = self.cursor.pos_within_token();
                 if terminated {
                     self.eat_literal_suffix();
                 }
@@ -608,9 +608,9 @@ impl<'a> Lexer<'a> {
                 Literal { kind, suffix_start }
             }
             ('r', '"', _) | ('r', '#', _) => {
-                self.bump();
+                self.cursor.bump();
                 let res = self.raw_double_quoted_string(2);
-                let suffix_start = self.pos_within_token();
+                let suffix_start = self.cursor.pos_within_token();
                 if res.is_ok() {
                     self.eat_literal_suffix();
                 }
