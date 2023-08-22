@@ -4,7 +4,7 @@ use rustc_ast::{
     token::Delimiter,
     tokenstream::{DelimSpan, TokenStream, TokenTree},
     BinOpKind, BorrowKind, DelimArgs, Expr, ExprKind, ItemKind, MacCall, MethodCall, Mutability,
-    Path, PathSegment, Stmt, StructRest, UnOp, UseTree, UseTreeKind, DUMMY_NODE_ID,
+    Path, PathSegment, Stmt, StructRest, UnOp, UseTree, UseTreeKind, DUMMY_NODE_ID, FStringPiece,
 };
 use rustc_ast_pretty::pprust;
 use rustc_data_structures::fx::FxHashSet;

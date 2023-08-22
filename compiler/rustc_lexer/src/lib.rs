@@ -346,6 +346,10 @@ impl<'a> Lexer<'a> {
         Lexer { cursor: Cursor::new(input), brace_count: 0, brace_f_string_triggers: vec![] }
     }
 
+    pub fn as_str(&self) -> &'a str {
+        self.cursor.as_str()
+    }
+
     /// Parses a token from the input string.
     pub fn advance_token(&mut self) -> Token {
         let first_char = match self.cursor.bump() {

@@ -9,8 +9,7 @@ use rustc_ast::tokenstream::TokenStream;
 use rustc_ast::util::unicode::contains_text_flow_control_chars;
 use rustc_errors::{error_code, Applicability, Diagnostic, DiagnosticBuilder, StashKey};
 use rustc_lexer::unescape::{self, EscapeError, Mode};
-use rustc_lexer::{Base, DocStyle, RawStrError};
-use rustc_lexer::{Cursor, LiteralKind};
+use rustc_lexer::{Base, DocStyle, Lexer, LiteralKind, RawStrError};
 use rustc_session::lint::builtin::{
     RUST_2021_PREFIXES_INCOMPATIBLE_SYNTAX, TEXT_DIRECTION_CODEPOINT_IN_COMMENT,
 };
@@ -115,7 +114,7 @@ impl<'a> StringReader<'a> {
         let mut swallow_next_invalid = 0;
         // Skip trivial (whitespace & comments) tokens
         loop {
-            let str_before = self.cursor.as_str();
+            let str_before = self.lexer.as_str();
             let token = self.lexer.advance_token();
             let start = self.pos;
             self.pos = self.pos + BytePos(token.len);
@@ -210,7 +209,7 @@ impl<'a> StringReader<'a> {
                     // was consumed.
                     let lit_start = start + BytePos(prefix_len);
                     self.pos = lit_start;
-                    self.cursor = Cursor::new(&str_before[prefix_len as usize..]);
+                    self.lexer = Lexer::new(&str_before[prefix_len as usize..]);
 
                     self.report_unknown_prefix(start);
                     let prefix_span = self.mk_sp(start, lit_start);
@@ -244,7 +243,11 @@ impl<'a> StringReader<'a> {
                         let end_delimiter = translate_f_str_delimiter(end_delimiter);
                         let prefix_len = start_delimiter.display(true).len() as u32;
                         let postfix_len = end_delimiter.display(false).len() as u32;
-                        match self.cook_quoted_common(Mode::FStr, start, end, prefix_len, postfix_len) { // `f" "`, `f" {`, `} {`, `} "`
+                        match self.cook_quoted_common(Mode::FStr, start, end, prefix_len, postfix_len, |src, mode, callback| {
+                            unescape::unescape_literal(src, mode, &mut |span, result| {
+                                callback(span, result.map(drop))
+                            })
+                        }) { // `f" "`, `f" {`, `} {`, `} "`
                             Ok(symbol) => token::FStr(start_delimiter, symbol, end_delimiter),
                             Err(symbol) => token::Literal(token::Lit { kind: token::Err, symbol, suffix: None }), // TODO: Check
                         }
@@ -721,7 +724,7 @@ impl<'a> StringReader<'a> {
         postfix_len: u32,
         unescape: fn(&str, Mode, &mut dyn FnMut(Range<usize>, Result<(), EscapeError>)),
     ) -> (token::LitKind, Symbol) {
-        match self.cook_quoted_common(mode, start, end, prefix_len, postfix_len) {
+        match self.cook_quoted_common(mode, start, end, prefix_len, postfix_len, unescape) {
             Ok(symbol) => (kind, symbol),
             Err(symbol) => (token::Err, symbol),
         }
@@ -734,6 +737,7 @@ impl<'a> StringReader<'a> {
         end: BytePos,
         prefix_len: u32,
         postfix_len: u32,
+        unescape: fn(&str, Mode, &mut dyn FnMut(Range<usize>, Result<(), EscapeError>)),
     ) -> Result<Symbol, Symbol> {
         let mut has_fatal_err = false;
         let content_start = start + BytePos(prefix_len);
