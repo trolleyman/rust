@@ -452,10 +452,8 @@ impl<'a> Lexer<'a> {
                 && self.brace_f_string_triggers[self.brace_f_string_triggers.len() - 1] + 1
                     == self.brace_count =>
             {
-                println!("Colon => :");
                 loop {
                     let c = self.cursor.first();
-                    println!("Colon =>> {}", c);
                     if c == '}' || c == EOF_CHAR {
                         break;
                     }
