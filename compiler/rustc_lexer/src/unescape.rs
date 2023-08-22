@@ -214,8 +214,6 @@ fn scan_escape<T: From<u8> + From<char>>(
     mode: Mode,
 ) -> Result<T, EscapeError> {
     // Previous character was '\\', unescape what follows.
-    let second_char = chars.next().ok_or(EscapeError::LoneSlash)?;
-
     let res = match chars.next().ok_or(EscapeError::LoneSlash)? {
         '"' => b'"',
         'n' => b'\n',
@@ -244,12 +242,9 @@ fn scan_escape<T: From<u8> + From<char>>(
         }
 
         'u' => return scan_unicode(chars, mode.is_unicode_escape_disallowed()).map(Into::into),
-        '{' | '}' => {
-            if mode != Mode::FStr {
-                return Err(EscapeError::InvalidEscape);
-            }
-            return Ok(second_char.into());
-        }
+        '{' | '}' if mode != Mode::FStr => return Err(EscapeError::InvalidEscape),
+        '{' => b'{',
+        '}' => b'}',
         _ => return Err(EscapeError::InvalidEscape),
     };
     Ok(res.into())
