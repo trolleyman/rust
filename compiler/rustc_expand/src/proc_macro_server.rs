@@ -209,6 +209,9 @@ impl FromInternal<(TokenStream, &mut Rustc<'_, '_>)> for Vec<TokenTree<TokenStre
                     //     FStrDelimiter::from_internal(end),
                     // )
                 }
+                FStrFormatSpec(_symbol) => {
+                    // TODO!!: implement f-strings
+                }
                 DocComment(_, attr_style, data) => {
                     let mut escaped = String::new();
                     for ch in data.as_str().chars() {

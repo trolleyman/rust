@@ -1894,7 +1894,14 @@ impl LitKind {
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub enum FStringPiece {
     Literal(Symbol),
-    Expr(P<Expr>),
+    Expr(P<Expr>, Option<FStringFormatSpec>),
+}
+
+/// F-string format spec
+#[derive(Clone, Encodable, Decodable, Debug)]
+pub struct FStringFormatSpec {
+    pub sym: Symbol,
+    pub span: Span,
 }
 
 // N.B., If you change this, you'll probably want to change the corresponding

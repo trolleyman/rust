@@ -807,6 +807,7 @@ pub trait PrintState<'a>: std::ops::Deref<Target = pp::Printer> + std::ops::Dere
                 end = end.display(false)
             )
             .into(),
+            token::FStrFormatSpec(symbol) => format!(":{}", symbol).into(),
 
             /* Name components */
             token::Ident(s, is_raw) => {
@@ -1026,11 +1027,15 @@ impl<'a> State<'a> {
                         .replace("}", "}}");
                     buffer.push_str(&escaped_string);
                 }
-                ast::FStringPiece::Expr(expr) => {
+                ast::FStringPiece::Expr(expr, format_spec) => {
                     buffer.push('{');
                     self.word(buffer.clone());
                     buffer.clear();
                     self.print_expr(expr);
+                    if let Some(format_spec) = format_spec {
+                        buffer.push(':');
+                        buffer.push_str(format_spec.sym.as_str())
+                    }
                     buffer.push('}');
                 }
             }

@@ -1,0 +1,9 @@
+FORMAT SPEC: "<5" => Display FormatOptions { width: Some(Literal(5)), precision: None, alignment: Some(Left), fill: None, sign: None, alternate: false, zero_pad: false, debug_hex: None }
+FORMAT SPEC: "-<5" => Display FormatOptions { width: Some(Literal(5)), precision: None, alignment: Some(Left), fill: Some('-'), sign: None, alternate: false, zero_pad: false, debug_hex: None }
+FORMAT SPEC: "^5" => Display FormatOptions { width: Some(Literal(5)), precision: None, alignment: Some(Center), fill: None, sign: None, alternate: false, zero_pad: false, debug_hex: None }
+FORMAT SPEC: ">5" => Display FormatOptions { width: Some(Literal(5)), precision: None, alignment: Some(Right), fill: None, sign: None, alternate: false, zero_pad: false, debug_hex: None }
+FORMAT SPEC: "+" => Display FormatOptions { width: None, precision: None, alignment: None, fill: None, sign: Some(Plus), alternate: false, zero_pad: false, debug_hex: None }
+FORMAT SPEC: "#x" => LowerHex FormatOptions { width: None, precision: None, alignment: None, fill: None, sign: None, alternate: true, zero_pad: false, debug_hex: None }
+FORMAT SPEC: "05" => Display FormatOptions { width: Some(Literal(5)), precision: None, alignment: None, fill: None, sign: None, alternate: false, zero_pad: true, debug_hex: None }
+FORMAT SPEC: "05" => Display FormatOptions { width: Some(Literal(5)), precision: None, alignment: None, fill: None, sign: None, alternate: false, zero_pad: true, debug_hex: None }
+FORMAT SPEC: "#010x" => LowerHex FormatOptions { width: Some(Literal(10)), precision: None, alignment: None, fill: None, sign: None, alternate: true, zero_pad: true, debug_hex: None }

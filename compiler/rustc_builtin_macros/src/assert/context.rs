@@ -241,7 +241,7 @@ impl<'cx, 'a> Context<'cx, 'a> {
                 for segment in pieces {
                     match segment {
                         FStringPiece::Literal(_) => { },
-                        FStringPiece::Expr(expr) => self.manage_cond_expr(expr),
+                        FStringPiece::Expr(expr, _) => self.manage_cond_expr(expr),
                     }
                 }
             }

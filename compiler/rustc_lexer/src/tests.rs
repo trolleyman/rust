@@ -534,32 +534,32 @@ f"foo {42:invalid} bar""#,
             Token { kind: Whitespace, len: 1 }
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
-            Token { kind: FStrFormatSpecifier, len: 1 }
+            Token { kind: FStrFormatSpec, len: 1 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
-            Token { kind: FStrFormatSpecifier, len: 3 }
+            Token { kind: FStrFormatSpec, len: 3 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
-            Token { kind: FStrFormatSpecifier, len: 4 }
+            Token { kind: FStrFormatSpec, len: 4 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
-            Token { kind: FStrFormatSpecifier, len: 1 }
+            Token { kind: FStrFormatSpec, len: 1 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Ident, len: 3 }
-            Token { kind: FStrFormatSpecifier, len: 12 }
+            Token { kind: FStrFormatSpec, len: 12 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
-            Token { kind: FStrFormatSpecifier, len: 8 }
+            Token { kind: FStrFormatSpec, len: 8 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
         "#]],
     )
@@ -572,7 +572,7 @@ fn f_string_trailing_format_specifier() {
         expect![[r#"
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
-            Token { kind: FStrFormatSpecifier, len: 9 }
+            Token { kind: FStrFormatSpec, len: 9 }
         "#]],
     )
 }
@@ -651,7 +651,7 @@ fn f_string_nested_format_specifiers() {
             Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 10 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: Ident, len: 3 }
-            Token { kind: FStrFormatSpecifier, len: 7 }
+            Token { kind: FStrFormatSpec, len: 7 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 9 }
             Token { kind: Comma, len: 1 }
             Token { kind: Whitespace, len: 1 }
@@ -661,7 +661,7 @@ fn f_string_nested_format_specifiers() {
             Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
             Token { kind: Whitespace, len: 1 }
             Token { kind: CloseBrace, len: 1 }
-            Token { kind: FStrFormatSpecifier, len: 7 }
+            Token { kind: FStrFormatSpec, len: 7 }
             Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
         "#]],
     )

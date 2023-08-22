@@ -8,7 +8,7 @@ use super::{
 
 use crate::errors;
 use crate::maybe_recover_from_interpolated_ty_qpath;
-use ast::{FStringPiece, Path, PathSegment};
+use ast::{FStringPiece, Path, PathSegment, FStringFormatSpec};
 use core::mem;
 use rustc_ast::ptr::P;
 use rustc_ast::token::{self, Delimiter, Token, TokenKind};
@@ -1485,6 +1485,15 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_opt_f_string_format_spec(&mut self) -> Option<FStringFormatSpec> {
+        if let TokenKind::FStrFormatSpec(symbol) = self.token.kind {
+            self.bump();
+            Some(FStringFormatSpec { sym: symbol, span: self.token.span })
+        } else {
+            None
+        }
+    }
+
     fn parse_f_string_piece(
         &mut self,
         expected_start_delimiter: token::FStrDelimiter,
@@ -1535,7 +1544,8 @@ impl<'a> Parser<'a> {
                 }
 
                 let expr = self.parse_expr()?;
-                pieces.push(FStringPiece::Expr(expr));
+                let format_spec = self.parse_opt_f_string_format_spec();
+                pieces.push(FStringPiece::Expr(expr, format_spec));
 
                 let (symbol, delimiter) = self.parse_f_string_piece(token::FStrDelimiter::Brace)?;
                 end_delimiter = delimiter;

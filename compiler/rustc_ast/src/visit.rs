@@ -823,7 +823,7 @@ pub fn walk_expr<'a, V: Visitor<'a>>(visitor: &mut V, expression: &'a Expr) {
         ExprKind::FStr(pieces) => {
             for segment in pieces {
                 match segment {
-                    FStringPiece::Expr(ex) => visitor.visit_expr(ex),
+                    FStringPiece::Expr(ex, _) => visitor.visit_expr(ex),
                     FStringPiece::Literal(_) => {}
                 }
             }

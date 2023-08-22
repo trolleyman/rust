@@ -85,6 +85,7 @@ mod asm;
 mod block;
 mod errors;
 mod expr;
+mod f_string;
 mod format;
 mod index;
 mod item;

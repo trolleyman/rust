@@ -76,16 +76,17 @@ impl<'hir> LoweringContext<'_, 'hir> {
                             FStringPiece::Literal(symbol) => {
                                 template.push(FormatArgsPiece::Literal(*symbol))
                             }
-                            FStringPiece::Expr(expr) => {
+                            FStringPiece::Expr(expr, format_spec) => {
+                                let (format_trait, format_options) = self.lower_f_string_format_spec(format_spec);
                                 template.push(FormatArgsPiece::Placeholder(FormatPlaceholder {
                                     argument: FormatArgPosition {
                                         index: Ok(arguments.all_args().len()),
                                         kind: FormatArgPositionKind::Implicit,
                                         span: None,
                                     },
-                                    span: Some(expr.span), // TODO: Check
-                                    format_trait: FormatTrait::Display, // TODO: Implement format string options
-                                    format_options: FormatOptions::default(),
+                                    span: Some(expr.span), // TODO: Check (maybe expand to include format spec)
+                                    format_trait,
+                                    format_options,
                                 }));
                                 arguments.add(FormatArgument {
                                     kind: FormatArgumentKind::Normal,

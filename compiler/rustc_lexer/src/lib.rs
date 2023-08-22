@@ -99,7 +99,7 @@ pub enum TokenKind {
     FStr { start: FStrDelimiter, end: Option<FStrDelimiter> },
 
     /// `:`, `:#?`, `: <5`, `:@<+#012.4x?`, or `:invalid`
-    FStrFormatSpecifier,
+    FStrFormatSpec,
 
     /// "'a"
     Lifetime { starts_with_number: bool },
@@ -459,7 +459,7 @@ impl<'a> Lexer<'a> {
                     }
                     self.cursor.bump();
                 }
-                FStrFormatSpecifier
+                FStrFormatSpec
             }
             ':' => Colon,
             '$' => Dollar,

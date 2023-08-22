@@ -288,6 +288,8 @@ pub enum TokenKind {
     Literal(Lit),
     /// F-string, delimited at the start and end by the specified delimiters.
     FStr(FStrDelimiter, Symbol, FStrDelimiter),
+    /// F-string format spec.
+    FStrFormatSpec(Symbol),
 
     /// Identifier token.
     /// Do not forget about `NtIdent` when you want to match on identifiers.
@@ -430,8 +432,8 @@ impl Token {
             | BinOpEq(_) | At | Dot | DotDot | DotDotDot | DotDotEq | Comma | Semi | Colon
             | ModSep | RArrow | LArrow | FatArrow | Pound | Dollar | Question | SingleQuote => true,
 
-            OpenDelim(..) | CloseDelim(..) | Literal(..) | FStr(..) | DocComment(..)
-            | Ident(..) | Lifetime(..) | Interpolated(..) | Eof => false,
+            OpenDelim(..) | CloseDelim(..) | Literal(..) | FStr(..) | FStrFormatSpec(..)
+            | DocComment(..) | Ident(..) | Lifetime(..) | Interpolated(..) | Eof => false,
         }
     }
 
@@ -804,8 +806,9 @@ impl Token {
 
             Le | EqEq | Ne | Ge | AndAnd | OrOr | Tilde | BinOpEq(..) | At | DotDotDot
             | DotDotEq | Comma | Semi | ModSep | RArrow | LArrow | FatArrow | Pound | Dollar
-            | Question | OpenDelim(..) | CloseDelim(..) | Literal(..) | FStr(..) | Ident(..)
-            | Lifetime(..) | Interpolated(..) | DocComment(..) | Eof => return None,
+            | Question | OpenDelim(..) | CloseDelim(..) | Literal(..) | FStr(..)
+            | FStrFormatSpec(..) | Ident(..) | Lifetime(..) | Interpolated(..) | DocComment(..)
+            | Eof => return None,
         };
 
         Some(Token::new(kind, self.span.to(joint.span)))
