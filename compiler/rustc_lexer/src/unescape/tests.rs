@@ -14,17 +14,17 @@ fn test_unescape_char_bad() {
     check("'", EscapeError::EscapeOnlyChar);
     check("\r", EscapeError::BareCarriageReturn);
 
-    println!("aa={}", "spam"); check("spam", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\x0ff"); check(r"\x0ff", EscapeError::MoreThanOneChar);
-    println!("aa={}", r#"\"a"#); check(r#"\"a"#, EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\na"); check(r"\na", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\ra"); check(r"\ra", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\ta"); check(r"\ta", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\\a"); check(r"\\a", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\'a"); check(r"\'a", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\0a"); check(r"\0a", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\u{0}x"); check(r"\u{0}x", EscapeError::MoreThanOneChar);
-    println!("aa={}", r"\u{1F63b}}"); check(r"\u{1F63b}}", EscapeError::MoreThanOneChar);
+    check("spam", EscapeError::MoreThanOneChar);
+    check(r"\x0ff", EscapeError::MoreThanOneChar);
+    check(r#"\"a"#, EscapeError::MoreThanOneChar);
+    check(r"\na", EscapeError::MoreThanOneChar);
+    check(r"\ra", EscapeError::MoreThanOneChar);
+    check(r"\ta", EscapeError::MoreThanOneChar);
+    check(r"\\a", EscapeError::MoreThanOneChar);
+    check(r"\'a", EscapeError::MoreThanOneChar);
+    check(r"\0a", EscapeError::MoreThanOneChar);
+    check(r"\u{0}x", EscapeError::MoreThanOneChar);
+    check(r"\u{1F63b}}", EscapeError::MoreThanOneChar);
 
     check(r"\{", EscapeError::InvalidEscape);
     check(r"\}", EscapeError::InvalidEscape);
