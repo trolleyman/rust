@@ -519,3 +519,151 @@ fn f_string_inner_string_literal() {
         "#]],
     )
 }
+
+#[test]
+fn f_string_format_specifiers() {
+    check_lexing(
+        r#"
+f"foo {42:} bar"
+f"foo {42:04} bar"
+f"foo {42: <4} bar"
+f"foo {42:} bar"
+f"foo {bar:#<+#012.4x?} baz"
+f"foo {42:invalid} bar""#,
+        expect![[r#"
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: FStrFormatSpecifier, len: 1 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: FStrFormatSpecifier, len: 3 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: FStrFormatSpecifier, len: 4 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: FStrFormatSpecifier, len: 1 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: FStrFormatSpecifier, len: 12 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: FStrFormatSpecifier, len: 8 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+        "#]],
+    )
+}
+
+#[test]
+fn f_string_trailing_format_specifier() {
+    check_lexing(
+        r#"f"foo {42:trailing"#,
+        expect![[r#"
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: FStrFormatSpecifier, len: 9 }
+        "#]],
+    )
+}
+
+#[test]
+fn f_string_no_format_specifiers() {
+    check_lexing(
+        r#"
+f"foo { Type { foo: 12, bar: 19 } } bar"
+f"foo { f"nested further { Type { foo: 12, bar: 19 } }" } bar""#,
+        expect![[r#"
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 4 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: OpenBrace, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: Colon, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: Comma, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: Colon, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: CloseBrace, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 18 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 4 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: OpenBrace, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: Colon, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: Comma, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: Colon, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: CloseBrace, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 2 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+        "#]],
+    )
+}
+
+#[test]
+fn f_string_nested_format_specifiers() {
+    check_lexing(
+        r#"f"foo { Type { foo: f"colon: { baz:format}: colon", bar: 19 }:format} bar""#,
+        expect![[r#"
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 7 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 4 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: OpenBrace, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: Colon, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: FStr { start: Quote, end: Some(Brace) }, len: 10 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: FStrFormatSpecifier, len: 7 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 9 }
+            Token { kind: Comma, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Ident, len: 3 }
+            Token { kind: Colon, len: 1 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: Literal { kind: Int { base: Decimal, empty_int: false }, suffix_start: 2 }, len: 2 }
+            Token { kind: Whitespace, len: 1 }
+            Token { kind: CloseBrace, len: 1 }
+            Token { kind: FStrFormatSpecifier, len: 7 }
+            Token { kind: FStr { start: Brace, end: Some(Quote) }, len: 6 }
+        "#]],
+    )
+}
+

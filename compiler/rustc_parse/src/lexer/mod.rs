@@ -240,6 +240,7 @@ impl<'a> StringReader<'a> {
                         )
                     }
                 }
+                rustc_lexer::TokenKind::FStrFormatSpecifier => todo!(),
                 rustc_lexer::TokenKind::Lifetime { starts_with_number, contains_emoji } => {
                     // Include the leading `'` in the real identifier, for macro
                     // expansion purposes. See #12512 for the gory details of why

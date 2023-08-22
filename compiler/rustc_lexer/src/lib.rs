@@ -97,6 +97,9 @@ pub enum TokenKind {
     /// `f"foo{`, `} bar {`, `} quux"`, `f"foo"`, or `f"unterminated`
     FStr { start: FStrDelimiter, end: Option<FStrDelimiter> },
 
+    /// `:`, `:#?`, `: <5`, `:@<+#012.4x?`, or `:invalid`
+    FStrFormatSpecifier,
+
     /// `'a`
     Lifetime { starts_with_number: bool, contains_emoji: bool },
 
@@ -441,15 +444,12 @@ impl<'a> Lexer<'a> {
             }
             '}' => {
                 self.brace_count -= 1;
-                if self.brace_f_string_triggers.len() > 0 {
-                    let brace_trigger =
-                        self.brace_f_string_triggers[self.brace_f_string_triggers.len() - 1];
-                    if brace_trigger == self.brace_count {
-                        self.brace_f_string_triggers.pop();
-                        self.f_string(FStrDelimiter::Brace)
-                    } else {
-                        CloseBrace
-                    }
+                if self.brace_f_string_triggers.len() > 0
+                    && self.brace_f_string_triggers[self.brace_f_string_triggers.len() - 1]
+                        == self.brace_count
+                {
+                    self.brace_f_string_triggers.pop();
+                    self.f_string(FStrDelimiter::Brace)
                 } else {
                     CloseBrace
                 }
@@ -460,6 +460,21 @@ impl<'a> Lexer<'a> {
             '#' => Pound,
             '~' => Tilde,
             '?' => Question,
+            ':' if self.brace_f_string_triggers.len() > 0
+                && self.brace_f_string_triggers[self.brace_f_string_triggers.len() - 1] + 1
+                    == self.brace_count =>
+            {
+                println!("Colon => :");
+                loop {
+                    let c = self.cursor.first();
+                    println!("Colon =>> {}", c);
+                    if c == '}' || c == EOF_CHAR {
+                        break;
+                    }
+                    self.cursor.bump();
+                }
+                FStrFormatSpecifier
+            }
             ':' => Colon,
             '$' => Dollar,
             '=' => Eq,
