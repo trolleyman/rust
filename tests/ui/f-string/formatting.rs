@@ -7,6 +7,7 @@ pub fn main() {
     assert_eq!(f"Hello {"x":-<5}!", "Hello x----!");
     assert_eq!(f"Hello {"x":^5}!", "Hello   x  !");
     assert_eq!(f"Hello {"x":>5}!", "Hello     x!");
+    assert_eq!(f"Hello {"x":\>5}!", r#"Hello \\\\x!"#);
 
     // Sign / # / 0
     assert_eq!(f"Hello {5:+}!", "Hello +5!");
