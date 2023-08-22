@@ -1,4 +1,3 @@
-use parking_lot::Mutex;
 use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_data_structures::profiling::{EventId, QueryInvocationId, SelfProfilerRef};
@@ -6,7 +5,8 @@ use rustc_data_structures::sharded::{self, Sharded};
 use rustc_data_structures::stable_hasher::{HashStable, StableHasher};
 use rustc_data_structures::steal::Steal;
 use rustc_data_structures::sync::{AtomicU32, AtomicU64, Lock, Lrc, Ordering};
-use rustc_index::vec::IndexVec;
+use rustc_data_structures::unord::UnordMap;
+use rustc_index::IndexVec;
 use rustc_serialize::opaque::{FileEncodeResult, FileEncoder};
 use smallvec::{smallvec, SmallVec};
 use std::assert_matches::assert_matches;
@@ -87,13 +87,13 @@ pub struct DepGraphData<K: DepKind> {
 
     colors: DepNodeColorMap,
 
-    processed_side_effects: Mutex<FxHashSet<DepNodeIndex>>,
+    processed_side_effects: Lock<FxHashSet<DepNodeIndex>>,
 
     /// When we load, there may be `.o` files, cached MIR, or other such
     /// things available to us. If we find that they are not dirty, we
     /// load the path to the file storing those work-products here into
     /// this map. We can later look for and extract that data.
-    previous_work_products: FxHashMap<WorkProductId, WorkProduct>,
+    previous_work_products: WorkProductMap,
 
     dep_node_debug: Lock<FxHashMap<DepNode<K>, String>>,
 
@@ -116,7 +116,7 @@ impl<K: DepKind> DepGraph<K> {
     pub fn new(
         profiler: &SelfProfilerRef,
         prev_graph: SerializedDepGraph<K>,
-        prev_work_products: FxHashMap<WorkProductId, WorkProduct>,
+        prev_work_products: WorkProductMap,
         encoder: FileEncoder,
         record_graph: bool,
         record_stats: bool,
@@ -143,7 +143,7 @@ impl<K: DepKind> DepGraph<K> {
         assert_eq!(_green_node_index, DepNodeIndex::SINGLETON_DEPENDENCYLESS_ANON_NODE);
 
         // Instantiate a dependy-less red node only once for anonymous queries.
-        let (_red_node_index, _prev_and_index) = current.intern_node(
+        let (red_node_index, red_node_prev_index_and_color) = current.intern_node(
             profiler,
             &prev_graph,
             DepNode { kind: DepKind::RED, hash: Fingerprint::ZERO.into() },
@@ -151,8 +151,21 @@ impl<K: DepKind> DepGraph<K> {
             None,
             false,
         );
-        assert_eq!(_red_node_index, DepNodeIndex::FOREVER_RED_NODE);
-        assert!(matches!(_prev_and_index, None | Some((_, DepNodeColor::Red))));
+        assert_eq!(red_node_index, DepNodeIndex::FOREVER_RED_NODE);
+        match red_node_prev_index_and_color {
+            None => {
+                // This is expected when we have no previous compilation session.
+                assert!(prev_graph_node_count == 0);
+            }
+            Some((prev_red_node_index, DepNodeColor::Red)) => {
+                assert_eq!(prev_red_node_index.as_usize(), red_node_index.as_usize());
+                colors.insert(prev_red_node_index, DepNodeColor::Red);
+            }
+            Some((_, DepNodeColor::Green(_))) => {
+                // There must be a logic error somewhere if we hit this branch.
+                panic!("DepNodeIndex::FOREVER_RED_NODE evaluated to DepNodeColor::Green")
+            }
+        }
 
         DepGraph {
             data: Some(Lrc::new(DepGraphData {
@@ -236,7 +249,7 @@ impl<K: DepKind> DepGraph<K> {
     /// get an ICE. Normally, we would have tried (and failed) to mark
     /// some other query green (e.g. `item_children`) which was used
     /// to obtain `C`, which would prevent us from ever trying to force
-    /// a non-existent `D`.
+    /// a nonexistent `D`.
     ///
     /// It might be possible to enforce that all `DepNode`s read during
     /// deserialization already exist in the previous `DepGraph`. In
@@ -341,25 +354,19 @@ impl<K: DepKind> DepGraphData<K> {
                  - dep-node: {key:?}"
         );
 
-        let task_deps = if cx.dep_context().is_eval_always(key.kind) {
-            None
+        let with_deps = |task_deps| K::with_deps(task_deps, || task(cx, arg));
+        let (result, edges) = if cx.dep_context().is_eval_always(key.kind) {
+            (with_deps(TaskDepsRef::EvalAlways), smallvec![])
         } else {
-            Some(Lock::new(TaskDeps {
+            let task_deps = Lock::new(TaskDeps {
                 #[cfg(debug_assertions)]
                 node: Some(key),
                 reads: SmallVec::new(),
                 read_set: Default::default(),
                 phantom_data: PhantomData,
-            }))
+            });
+            (with_deps(TaskDepsRef::Allow(&task_deps)), task_deps.into_inner().reads)
         };
-
-        let task_deps_ref = match &task_deps {
-            Some(deps) => TaskDepsRef::Allow(deps),
-            None => TaskDepsRef::Ignore,
-        };
-
-        let result = K::with_deps(task_deps_ref, || task(cx, arg));
-        let edges = task_deps.map_or_else(|| smallvec![], |lock| lock.into_inner().reads);
 
         let dcx = cx.dep_context();
         let hashing_timer = dcx.profiler().incr_result_hashing();
@@ -461,6 +468,11 @@ impl<K: DepKind> DepGraph<K> {
             K::read_deps(|task_deps| {
                 let mut task_deps = match task_deps {
                     TaskDepsRef::Allow(deps) => deps.lock(),
+                    TaskDepsRef::EvalAlways => {
+                        // We don't need to record dependencies of eval_always
+                        // queries. They are re-evaluated unconditionally anyway.
+                        return;
+                    }
                     TaskDepsRef::Ignore => return,
                     TaskDepsRef::Forbid => {
                         panic!("Illegal read of: {dep_node_index:?}")
@@ -538,7 +550,14 @@ impl<K: DepKind> DepGraph<K> {
             if let Some(prev_index) = data.previous.node_to_index_opt(&node) {
                 let dep_node_index = data.current.prev_index_to_index.lock()[prev_index];
                 if let Some(dep_node_index) = dep_node_index {
-                    crate::query::incremental_verify_ich(cx, data, result, prev_index, hash_result);
+                    crate::query::incremental_verify_ich(
+                        cx,
+                        data,
+                        result,
+                        prev_index,
+                        hash_result,
+                        |value| format!("{value:?}"),
+                    );
 
                     #[cfg(debug_assertions)]
                     if hash_result.is_some() {
@@ -556,7 +575,10 @@ impl<K: DepKind> DepGraph<K> {
             let mut edges = SmallVec::new();
             K::read_deps(|task_deps| match task_deps {
                 TaskDepsRef::Allow(deps) => edges.extend(deps.lock().reads.iter().copied()),
-                TaskDepsRef::Ignore => {} // During HIR lowering, we have no dependencies.
+                TaskDepsRef::EvalAlways => {
+                    edges.push(DepNodeIndex::FOREVER_RED_NODE);
+                }
+                TaskDepsRef::Ignore => {}
                 TaskDepsRef::Forbid => {
                     panic!("Cannot summarize when dependencies are not recorded.")
                 }
@@ -634,7 +656,7 @@ impl<K: DepKind> DepGraphData<K> {
     /// current compilation session. Used in various assertions
     #[inline]
     pub fn is_index_green(&self, prev_index: SerializedDepNodeIndex) -> bool {
-        self.colors.get(prev_index).map_or(false, |c| c.is_green())
+        self.colors.get(prev_index).is_some_and(|c| c.is_green())
     }
 
     #[inline]
@@ -655,7 +677,7 @@ impl<K: DepKind> DepGraphData<K> {
 impl<K: DepKind> DepGraph<K> {
     #[inline]
     pub fn dep_node_exists(&self, dep_node: &DepNode<K>) -> bool {
-        self.data.as_ref().map_or(false, |data| data.dep_node_exists(dep_node))
+        self.data.as_ref().is_some_and(|data| data.dep_node_exists(dep_node))
     }
 
     /// Checks whether a previous work product exists for `v` and, if
@@ -666,7 +688,7 @@ impl<K: DepKind> DepGraph<K> {
 
     /// Access the map of work-products created during the cached run. Only
     /// used during saving of the dep-graph.
-    pub fn previous_work_products(&self) -> &FxHashMap<WorkProductId, WorkProduct> {
+    pub fn previous_work_products(&self) -> &WorkProductMap {
         &self.data.as_ref().unwrap().previous_work_products
     }
 
@@ -933,7 +955,7 @@ impl<K: DepKind> DepGraph<K> {
     /// Returns true if the given node has been marked as green during the
     /// current compilation session. Used in various assertions
     pub fn is_green(&self, dep_node: &DepNode<K>) -> bool {
-        self.node_color(dep_node).map_or(false, |c| c.is_green())
+        self.node_color(dep_node).is_some_and(|c| c.is_green())
     }
 
     /// This method loads all on-disk cacheable query results into memory, so
@@ -1026,8 +1048,10 @@ pub struct WorkProduct {
     ///
     /// By convention, file extensions are currently used as identifiers, i.e. the key "o" maps to
     /// the object file's path, and "dwo" to the dwarf object file's path.
-    pub saved_files: FxHashMap<String, String>,
+    pub saved_files: UnordMap<String, String>,
 }
+
+pub type WorkProductMap = UnordMap<WorkProductId, WorkProduct>;
 
 // Index type for `DepNodeData`'s edges.
 rustc_index::newtype_index! {
@@ -1065,7 +1089,7 @@ pub(super) struct CurrentDepGraph<K: DepKind> {
     /// This is used to verify that fingerprints do not change between the creation of a node
     /// and its recomputation.
     #[cfg(debug_assertions)]
-    fingerprints: Lock<FxHashMap<DepNode<K>, Fingerprint>>,
+    fingerprints: Lock<IndexVec<DepNodeIndex, Option<Fingerprint>>>,
 
     /// Used to trap when a specific edge is added to the graph.
     /// This is used for debug purposes and is only active with `debug_assertions`.
@@ -1151,7 +1175,7 @@ impl<K: DepKind> CurrentDepGraph<K> {
             #[cfg(debug_assertions)]
             forbidden_edge,
             #[cfg(debug_assertions)]
-            fingerprints: Lock::new(Default::default()),
+            fingerprints: Lock::new(IndexVec::from_elem_n(None, new_node_count_estimate)),
             total_read_count: AtomicU64::new(0),
             total_duplicate_read_count: AtomicU64::new(0),
             node_intern_event_id,
@@ -1163,14 +1187,8 @@ impl<K: DepKind> CurrentDepGraph<K> {
         if let Some(forbidden_edge) = &self.forbidden_edge {
             forbidden_edge.index_to_node.lock().insert(dep_node_index, key);
         }
-        match self.fingerprints.lock().entry(key) {
-            Entry::Vacant(v) => {
-                v.insert(fingerprint);
-            }
-            Entry::Occupied(o) => {
-                assert_eq!(*o.get(), fingerprint, "Unstable fingerprints for {:?}", key);
-            }
-        }
+        let previous = *self.fingerprints.lock().get_or_insert_with(dep_node_index, || fingerprint);
+        assert_eq!(previous, fingerprint, "Unstable fingerprints for {:?}", key);
     }
 
     /// Writes the node to the current dep-graph and allocates a `DepNodeIndex` for it.
@@ -1216,76 +1234,48 @@ impl<K: DepKind> CurrentDepGraph<K> {
             self.node_intern_event_id.map(|eid| profiler.generic_activity_with_event_id(eid));
 
         if let Some(prev_index) = prev_graph.node_to_index_opt(&key) {
-            // Determine the color and index of the new `DepNode`.
-            if let Some(fingerprint) = fingerprint {
-                if fingerprint == prev_graph.fingerprint_by_index(prev_index) {
-                    if print_status {
-                        eprintln!("[task::green] {key:?}");
-                    }
-
-                    // This is a green node: it existed in the previous compilation,
-                    // its query was re-executed, and it has the same result as before.
-                    let mut prev_index_to_index = self.prev_index_to_index.lock();
-
-                    let dep_node_index = match prev_index_to_index[prev_index] {
-                        Some(dep_node_index) => dep_node_index,
-                        None => {
-                            let dep_node_index =
-                                self.encoder.borrow().send(profiler, key, fingerprint, edges);
-                            prev_index_to_index[prev_index] = Some(dep_node_index);
-                            dep_node_index
-                        }
-                    };
-
-                    #[cfg(debug_assertions)]
-                    self.record_edge(dep_node_index, key, fingerprint);
-                    (dep_node_index, Some((prev_index, DepNodeColor::Green(dep_node_index))))
-                } else {
-                    if print_status {
-                        eprintln!("[task::red] {key:?}");
-                    }
-
-                    // This is a red node: it existed in the previous compilation, its query
-                    // was re-executed, but it has a different result from before.
-                    let mut prev_index_to_index = self.prev_index_to_index.lock();
-
-                    let dep_node_index = match prev_index_to_index[prev_index] {
-                        Some(dep_node_index) => dep_node_index,
-                        None => {
-                            let dep_node_index =
-                                self.encoder.borrow().send(profiler, key, fingerprint, edges);
-                            prev_index_to_index[prev_index] = Some(dep_node_index);
-                            dep_node_index
-                        }
-                    };
-
-                    #[cfg(debug_assertions)]
-                    self.record_edge(dep_node_index, key, fingerprint);
-                    (dep_node_index, Some((prev_index, DepNodeColor::Red)))
-                }
-            } else {
+            let get_dep_node_index = |color, fingerprint| {
                 if print_status {
-                    eprintln!("[task::unknown] {key:?}");
+                    eprintln!("[task::{color:}] {key:?}");
                 }
 
-                // This is a red node, effectively: it existed in the previous compilation
-                // session, its query was re-executed, but it doesn't compute a result hash
-                // (i.e. it represents a `no_hash` query), so we have no way of determining
-                // whether or not the result was the same as before.
                 let mut prev_index_to_index = self.prev_index_to_index.lock();
 
                 let dep_node_index = match prev_index_to_index[prev_index] {
                     Some(dep_node_index) => dep_node_index,
                     None => {
                         let dep_node_index =
-                            self.encoder.borrow().send(profiler, key, Fingerprint::ZERO, edges);
+                            self.encoder.borrow().send(profiler, key, fingerprint, edges);
                         prev_index_to_index[prev_index] = Some(dep_node_index);
                         dep_node_index
                     }
                 };
 
                 #[cfg(debug_assertions)]
-                self.record_edge(dep_node_index, key, Fingerprint::ZERO);
+                self.record_edge(dep_node_index, key, fingerprint);
+
+                dep_node_index
+            };
+
+            // Determine the color and index of the new `DepNode`.
+            if let Some(fingerprint) = fingerprint {
+                if fingerprint == prev_graph.fingerprint_by_index(prev_index) {
+                    // This is a green node: it existed in the previous compilation,
+                    // its query was re-executed, and it has the same result as before.
+                    let dep_node_index = get_dep_node_index("green", fingerprint);
+                    (dep_node_index, Some((prev_index, DepNodeColor::Green(dep_node_index))))
+                } else {
+                    // This is a red node: it existed in the previous compilation, its query
+                    // was re-executed, but it has a different result from before.
+                    let dep_node_index = get_dep_node_index("red", fingerprint);
+                    (dep_node_index, Some((prev_index, DepNodeColor::Red)))
+                }
+            } else {
+                // This is a red node, effectively: it existed in the previous compilation
+                // session, its query was re-executed, but it doesn't compute a result hash
+                // (i.e. it represents a `no_hash` query), so we have no way of determining
+                // whether or not the result was the same as before.
+                let dep_node_index = get_dep_node_index("unknown", Fingerprint::ZERO);
                 (dep_node_index, Some((prev_index, DepNodeColor::Red)))
             }
         } else {
@@ -1355,10 +1345,13 @@ pub enum TaskDepsRef<'a, K: DepKind> {
     /// `TaskDeps`. This is used when executing a 'normal' query
     /// (no `eval_always` modifier)
     Allow(&'a Lock<TaskDeps<K>>),
-    /// New dependencies are ignored. This is used when
-    /// executing an `eval_always` query, since there's no
+    /// This is used when executing an `eval_always` query. We don't
     /// need to track dependencies for a query that's always
-    /// re-executed. This is also used for `dep_graph.with_ignore`
+    /// re-executed -- but we need to know that this is an `eval_always`
+    /// query in order to emit dependencies to `DepNodeIndex::FOREVER_RED_NODE`
+    /// when directly feeding other queries.
+    EvalAlways,
+    /// New dependencies are ignored. This is also used for `dep_graph.with_ignore`.
     Ignore,
     /// Any attempt to add new dependencies will cause a panic.
     /// This is used when decoding a query result from disk,
@@ -1441,7 +1434,7 @@ pub(crate) fn print_markframe_trace<K: DepKind>(
     let mut current = frame;
     while let Some(frame) = current {
         let node = data.previous.index_to_node(frame.index);
-        eprintln!("#{i} {:?}", node);
+        eprintln!("#{i} {node:?}");
         current = frame.parent;
         i += 1;
     }

@@ -102,7 +102,7 @@ pub fn check(
             &tests_path.join("rustdoc-ui"),
             &tests_path.join("rustdoc"),
         ],
-        |path| {
+        |path, _is_dir| {
             filter_dirs(path)
                 || filter_not_rust(path)
                 || path.file_name() == Some(OsStr::new("features.rs"))
@@ -160,10 +160,10 @@ pub fn check(
     for &(name, _) in gate_untested.iter() {
         println!("Expected a gate test for the feature '{name}'.");
         println!(
-            "Hint: create a failing test file named 'feature-gate-{}.rs'\
-                \n      in the 'ui' test suite, with its failures due to\
-                \n      missing usage of `#![feature({})]`.",
-            name, name
+            "Hint: create a failing test file named 'tests/ui/feature-gates/feature-gate-{}.rs',\
+                \n      with its failures due to missing usage of `#![feature({})]`.",
+            name.replace("_", "-"),
+            name
         );
         println!(
             "Hint: If you already have such a test and don't want to rename it,\
@@ -338,6 +338,7 @@ fn collect_lang_features_in(features: &mut Features, base: &Path, file: &str, ba
         let level = match parts.next().map(|l| l.trim().trim_start_matches('(')) {
             Some("active") => Status::Unstable,
             Some("incomplete") => Status::Unstable,
+            Some("internal") => Status::Unstable,
             Some("removed") => Status::Removed,
             Some("accepted") => Status::Stable,
             _ => continue,
@@ -478,7 +479,7 @@ fn map_lib_features(
 ) {
     walk(
         base_src_path,
-        |path| filter_dirs(path) || path.ends_with("tests"),
+        |path, _is_dir| filter_dirs(path) || path.ends_with("tests"),
         &mut |entry, contents| {
             let file = entry.path();
             let filename = file.file_name().unwrap().to_string_lossy();

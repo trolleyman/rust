@@ -7,17 +7,17 @@ use rustc_attr::{
     UnstableReason, VERSION_PLACEHOLDER,
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexMap};
-use rustc_errors::Applicability;
 use rustc_hir as hir;
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::def_id::{LocalDefId, CRATE_DEF_ID};
+use rustc_hir::def_id::{LocalDefId, LocalModDefId, CRATE_DEF_ID};
 use rustc_hir::hir_id::CRATE_HIR_ID;
 use rustc_hir::intravisit::{self, Visitor};
 use rustc_hir::{FieldDef, Item, ItemKind, TraitRef, Ty, TyKind, Variant};
 use rustc_middle::hir::nested_filter;
 use rustc_middle::middle::privacy::EffectiveVisibilities;
 use rustc_middle::middle::stability::{AllowUnstable, DeprecationEntry, Index};
-use rustc_middle::ty::{query::Providers, TyCtxt};
+use rustc_middle::query::Providers;
+use rustc_middle::ty::TyCtxt;
 use rustc_session::lint;
 use rustc_session::lint::builtin::{INEFFECTIVE_UNSTABLE_TRAIT_IMPL, USELESS_DEPRECATED};
 use rustc_span::symbol::{sym, Symbol};
@@ -115,7 +115,7 @@ impl<'a, 'tcx> Annotator<'a, 'tcx> {
         let attrs = self.tcx.hir().attrs(self.tcx.hir().local_def_id_to_hir_id(def_id));
         debug!("annotate(id = {:?}, attrs = {:?})", def_id, attrs);
 
-        let depr = attr::find_deprecation(&self.tcx.sess, attrs);
+        let depr = attr::find_deprecation(self.tcx.sess, self.tcx.features(), attrs);
         let mut is_deprecated = false;
         if let Some((depr, span)) = &depr {
             is_deprecated = true;
@@ -530,7 +530,7 @@ struct MissingStabilityAnnotations<'tcx> {
 impl<'tcx> MissingStabilityAnnotations<'tcx> {
     fn check_missing_stability(&self, def_id: LocalDefId, span: Span) {
         let stab = self.tcx.stability().local_stability(def_id);
-        if !self.tcx.sess.opts.test
+        if !self.tcx.sess.is_test_crate()
             && stab.is_none()
             && self.effective_visibilities.is_reachable(def_id)
         {
@@ -554,10 +554,8 @@ impl<'tcx> MissingStabilityAnnotations<'tcx> {
 
         let is_const = self.tcx.is_const_fn(def_id.to_def_id())
             || self.tcx.is_const_trait_impl_raw(def_id.to_def_id());
-        let is_stable = self
-            .tcx
-            .lookup_stability(def_id)
-            .map_or(false, |stability| stability.level.is_stable());
+        let is_stable =
+            self.tcx.lookup_stability(def_id).is_some_and(|stability| stability.level.is_stable());
         let missing_const_stability_attribute = self.tcx.lookup_const_stability(def_id).is_none();
         let is_reachable = self.effective_visibilities.is_reachable(def_id);
 
@@ -684,7 +682,7 @@ fn stability_index(tcx: TyCtxt<'_>, (): ()) -> Index {
 
 /// Cross-references the feature names of unstable APIs with enabled
 /// features and possibly prints errors.
-fn check_mod_unstable_api_usage(tcx: TyCtxt<'_>, module_def_id: LocalDefId) {
+fn check_mod_unstable_api_usage(tcx: TyCtxt<'_>, module_def_id: LocalModDefId) {
     tcx.hir().visit_item_likes_in_module(module_def_id, &mut Checker { tcx });
 }
 
@@ -734,13 +732,7 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
             // For implementations of traits, check the stability of each item
             // individually as it's possible to have a stable trait with unstable
             // items.
-            hir::ItemKind::Impl(hir::Impl {
-                of_trait: Some(ref t),
-                self_ty,
-                items,
-                constness,
-                ..
-            }) => {
+            hir::ItemKind::Impl(hir::Impl { of_trait: Some(ref t), self_ty, items, .. }) => {
                 let features = self.tcx.features();
                 if features.staged_api {
                     let attrs = self.tcx.hir().attrs(item.hir_id());
@@ -759,12 +751,11 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
                         // do not lint when the trait isn't resolved, since resolution error should
                         // be fixed first
                         if t.path.res != Res::Err && c.fully_stable {
-                            self.tcx.struct_span_lint_hir(
+                            self.tcx.emit_spanned_lint(
                                 INEFFECTIVE_UNSTABLE_TRAIT_IMPL,
                                 item.hir_id(),
                                 span,
-                                "an `#[unstable]` annotation here has no effect",
-                                |lint| lint.note("see issue #55436 <https://github.com/rust-lang/rust/issues/55436> for more information")
+                                errors::IneffectiveUnstableImpl,
                             );
                         }
                     }
@@ -772,8 +763,8 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
                     // `#![feature(const_trait_impl)]` is unstable, so any impl declared stable
                     // needs to have an error emitted.
                     if features.const_trait_impl
-                        && *constness == hir::Constness::Const
-                        && const_stab.map_or(false, |(stab, _)| stab.is_const_stable())
+                        && self.tcx.is_const_trait_impl_raw(item.owner_id.to_def_id())
+                        && const_stab.is_some_and(|(stab, _)| stab.is_const_stable())
                     {
                         self.tcx.sess.emit_err(errors::TraitImplConstStable { span: item.span });
                     }
@@ -810,15 +801,12 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
             );
 
             let is_allowed_through_unstable_modules = |def_id| {
-                self.tcx
-                    .lookup_stability(def_id)
-                    .map(|stab| match stab.level {
-                        StabilityLevel::Stable { allowed_through_unstable_modules, .. } => {
-                            allowed_through_unstable_modules
-                        }
-                        _ => false,
-                    })
-                    .unwrap_or(false)
+                self.tcx.lookup_stability(def_id).is_some_and(|stab| match stab.level {
+                    StabilityLevel::Stable { allowed_through_unstable_modules, .. } => {
+                        allowed_through_unstable_modules
+                    }
+                    _ => false,
+                })
             };
 
             if item_is_allowed && !is_allowed_through_unstable_modules(def_id) {
@@ -862,7 +850,9 @@ impl<'tcx> Visitor<'tcx> for Checker<'tcx> {
 /// See issue #94972 for details on why this is a special case
 fn is_unstable_reexport(tcx: TyCtxt<'_>, id: hir::HirId) -> bool {
     // Get the LocalDefId so we can lookup the item to check the kind.
-    let Some(owner) = id.as_owner() else { return false; };
+    let Some(owner) = id.as_owner() else {
+        return false;
+    };
     let def_id = owner.def_id;
 
     let Some(stab) = tcx.stability().local_stability(def_id) else {
@@ -1095,29 +1085,16 @@ fn unnecessary_partially_stable_feature_lint(
     implies: Symbol,
     since: Symbol,
 ) {
-    tcx.struct_span_lint_hir(
+    tcx.emit_spanned_lint(
         lint::builtin::STABLE_FEATURES,
         hir::CRATE_HIR_ID,
         span,
-        format!(
-            "the feature `{feature}` has been partially stabilized since {since} and is succeeded \
-             by the feature `{implies}`"
-        ),
-        |lint| {
-            lint.span_suggestion(
-                span,
-                &format!(
-                "if you are using features which are still unstable, change to using `{implies}`"
-            ),
-                implies,
-                Applicability::MaybeIncorrect,
-            )
-            .span_suggestion(
-                tcx.sess.source_map().span_extend_to_line(span),
-                "if you are using features which are now stable, remove this line",
-                "",
-                Applicability::MaybeIncorrect,
-            )
+        errors::UnnecessaryPartialStableFeature {
+            span,
+            line: tcx.sess.source_map().span_extend_to_line(span),
+            feature,
+            since,
+            implies,
         },
     );
 }
@@ -1131,7 +1108,10 @@ fn unnecessary_stable_feature_lint(
     if since.as_str() == VERSION_PLACEHOLDER {
         since = rust_version_symbol();
     }
-    tcx.struct_span_lint_hir(lint::builtin::STABLE_FEATURES, hir::CRATE_HIR_ID, span, format!("the feature `{feature}` has been stable since {since} and no longer requires an attribute to enable"), |lint| {
-        lint
-    });
+    tcx.emit_spanned_lint(
+        lint::builtin::STABLE_FEATURES,
+        hir::CRATE_HIR_ID,
+        span,
+        errors::UnnecessaryStableFeature { feature, since },
+    );
 }

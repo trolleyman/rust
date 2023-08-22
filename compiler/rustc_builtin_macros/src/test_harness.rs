@@ -4,10 +4,12 @@ use rustc_ast as ast;
 use rustc_ast::entry::EntryPointType;
 use rustc_ast::mut_visit::{ExpectOne, *};
 use rustc_ast::ptr::P;
+use rustc_ast::visit::{walk_item, Visitor};
 use rustc_ast::{attr, ModKind};
 use rustc_expand::base::{ExtCtxt, ResolverExpand};
 use rustc_expand::expand::{AstFragment, ExpansionConfig};
 use rustc_feature::Features;
+use rustc_session::lint::builtin::UNNAMEABLE_TEST_ITEMS;
 use rustc_session::Session;
 use rustc_span::hygiene::{AstPass, SyntaxContext, Transparency};
 use rustc_span::symbol::{sym, Ident, Symbol};
@@ -18,6 +20,8 @@ use thin_vec::{thin_vec, ThinVec};
 use tracing::debug;
 
 use std::{iter, mem};
+
+use crate::errors;
 
 #[derive(Clone)]
 struct Test {
@@ -37,7 +41,12 @@ struct TestCtxt<'a> {
 
 /// Traverse the crate, collecting all the test functions, eliding any
 /// existing main functions, and synthesizing a main test harness
-pub fn inject(krate: &mut ast::Crate, sess: &Session, resolver: &mut dyn ResolverExpand) {
+pub fn inject(
+    krate: &mut ast::Crate,
+    sess: &Session,
+    features: &Features,
+    resolver: &mut dyn ResolverExpand,
+) {
     let span_diagnostic = sess.diagnostic();
     let panic_strategy = sess.panic_strategy();
     let platform_panic_strategy = sess.target.panic_strategy;
@@ -53,7 +62,7 @@ pub fn inject(krate: &mut ast::Crate, sess: &Session, resolver: &mut dyn Resolve
     // even in non-test builds
     let test_runner = get_test_runner(span_diagnostic, &krate);
 
-    if sess.opts.test {
+    if sess.is_test_crate() {
         let panic_strategy = match (panic_strategy, sess.opts.unstable_opts.panic_abort_tests) {
             (PanicStrategy::Abort, true) => PanicStrategy::Abort,
             (PanicStrategy::Abort, false) => {
@@ -61,10 +70,7 @@ pub fn inject(krate: &mut ast::Crate, sess: &Session, resolver: &mut dyn Resolve
                     // Silently allow compiling with panic=abort on these platforms,
                     // but with old behavior (abort if a test fails).
                 } else {
-                    span_diagnostic.err(
-                        "building tests with panic=abort is not supported \
-                                         without `-Zpanic_abort_tests`",
-                    );
+                    span_diagnostic.emit_err(errors::TestsNotSupport {});
                 }
                 PanicStrategy::Unwind
             }
@@ -75,7 +81,7 @@ pub fn inject(krate: &mut ast::Crate, sess: &Session, resolver: &mut dyn Resolve
             resolver,
             reexport_test_harness_main,
             krate,
-            &sess.features_untracked(),
+            features,
             panic_strategy,
             test_runner,
         )
@@ -138,8 +144,28 @@ impl<'a> MutVisitor for TestHarnessGenerator<'a> {
             let prev_tests = mem::take(&mut self.tests);
             noop_visit_item_kind(&mut item.kind, self);
             self.add_test_cases(item.id, span, prev_tests);
+        } else {
+            // But in those cases, we emit a lint to warn the user of these missing tests.
+            walk_item(&mut InnerItemLinter { sess: self.cx.ext_cx.sess }, &item);
         }
         smallvec![P(item)]
+    }
+}
+
+struct InnerItemLinter<'a> {
+    sess: &'a Session,
+}
+
+impl<'a> Visitor<'a> for InnerItemLinter<'_> {
+    fn visit_item(&mut self, i: &'a ast::Item) {
+        if let Some(attr) = attr::find_by_name(&i.attrs, sym::rustc_test_marker) {
+            self.sess.parse_sess.buffer_lint(
+                UNNAMEABLE_TEST_ITEMS,
+                attr.span,
+                i.id,
+                crate::fluent_generated::builtin_macros_unnameable_test_items,
+            );
+        }
     }
 }
 
@@ -222,15 +248,13 @@ fn generate_test_harness(
     panic_strategy: PanicStrategy,
     test_runner: Option<ast::Path>,
 ) {
-    let mut econfig = ExpansionConfig::default("test".to_string());
-    econfig.features = Some(features);
-
+    let econfig = ExpansionConfig::default("test".to_string(), features);
     let ext_cx = ExtCtxt::new(sess, econfig, resolver, None);
 
     let expn_id = ext_cx.resolver.expansion_for_ast_pass(
         DUMMY_SP,
         AstPass::TestHarness,
-        &[sym::test, sym::rustc_attrs],
+        &[sym::test, sym::rustc_attrs, sym::no_coverage],
         None,
     );
     let def_site = DUMMY_SP.with_def_site_ctxt(expn_id.to_expn_id());
@@ -311,6 +335,8 @@ fn mk_main(cx: &mut TestCtxt<'_>) -> P<ast::Item> {
 
     // #[rustc_main]
     let main_attr = ecx.attr_word(sym::rustc_main, sp);
+    // #[no_coverage]
+    let no_coverage_attr = ecx.attr_word(sym::no_coverage, sp);
 
     // pub fn main() { ... }
     let main_ret_ty = ecx.ty(sp, ast::TyKind::Tup(ThinVec::new()));
@@ -340,7 +366,7 @@ fn mk_main(cx: &mut TestCtxt<'_>) -> P<ast::Item> {
 
     let main = P(ast::Item {
         ident: main_id,
-        attrs: thin_vec![main_attr],
+        attrs: thin_vec![main_attr, no_coverage_attr],
         id: ast::DUMMY_NODE_ID,
         kind: main,
         vis: ast::Visibility { span: sp, kind: ast::VisibilityKind::Public, tokens: None },
@@ -385,11 +411,11 @@ fn get_test_runner(sd: &rustc_errors::Handler, krate: &ast::Crate) -> Option<ast
         [single] => match single.meta_item() {
             Some(meta_item) if meta_item.is_word() => return Some(meta_item.path.clone()),
             _ => {
-                sd.struct_span_err(span, "`test_runner` argument must be a path").emit();
+                sd.emit_err(errors::TestRunnerInvalid { span });
             }
         },
         _ => {
-            sd.struct_span_err(span, "`#![test_runner(..)]` accepts exactly 1 argument").emit();
+            sd.emit_err(errors::TestRunnerNargs { span });
         }
     }
     None

@@ -117,16 +117,11 @@ impl<'a, 'b, 'tcx> UnusedImportCheckVisitor<'a, 'b, 'tcx> {
         match item.kind {
             ast::UseTreeKind::Simple(Some(ident)) => {
                 if ident.name == kw::Underscore
-                    && !self
-                        .r
-                        .import_res_map
-                        .get(&id)
-                        .map(|per_ns| {
-                            per_ns.iter().filter_map(|res| res.as_ref()).any(|res| {
-                                matches!(res, Res::Def(DefKind::Trait | DefKind::TraitAlias, _))
-                            })
+                    && !self.r.import_res_map.get(&id).is_some_and(|per_ns| {
+                        per_ns.iter().filter_map(|res| res.as_ref()).any(|res| {
+                            matches!(res, Res::Def(DefKind::Trait | DefKind::TraitAlias, _))
                         })
-                        .unwrap_or(false)
+                    })
                 {
                     self.unused_import(self.base_id).add(id);
                 }
@@ -367,7 +362,7 @@ impl Resolver<'_, '_> {
             let mut span_snippets = spans
                 .iter()
                 .filter_map(|s| match tcx.sess.source_map().span_to_snippet(*s) {
-                    Ok(s) => Some(format!("`{}`", s)),
+                    Ok(s) => Some(format!("`{s}`")),
                     _ => None,
                 })
                 .collect::<Vec<String>>();
@@ -393,7 +388,7 @@ impl Resolver<'_, '_> {
             // If we are in the `--test` mode, suppress a help that adds the `#[cfg(test)]`
             // attribute; however, if not, suggest adding the attribute. There is no way to
             // retrieve attributes here because we do not have a `TyCtxt` yet.
-            let test_module_span = if tcx.sess.opts.test {
+            let test_module_span = if tcx.sess.is_test_crate() {
                 None
             } else {
                 let parent_module = visitor.r.get_nearest_non_block_module(
@@ -418,7 +413,7 @@ impl Resolver<'_, '_> {
                 UNUSED_IMPORTS,
                 unused.use_tree_id,
                 ms,
-                &msg,
+                msg,
                 BuiltinLintDiagnostics::UnusedImports(fix_msg.into(), fixes, test_module_span),
             );
         }
@@ -445,7 +440,7 @@ impl Resolver<'_, '_> {
 
             // If we are not in Rust 2018 edition, then we don't make any further
             // suggestions.
-            if !tcx.sess.rust_2018() {
+            if !tcx.sess.at_least_rust_2018() {
                 continue;
             }
 
@@ -469,7 +464,7 @@ impl Resolver<'_, '_> {
                 .r
                 .extern_prelude
                 .get(&extern_crate.ident)
-                .map_or(false, |entry| !entry.introduced_by_item)
+                .is_some_and(|entry| !entry.introduced_by_item)
             {
                 continue;
             }

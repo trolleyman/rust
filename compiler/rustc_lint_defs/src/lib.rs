@@ -467,6 +467,21 @@ impl<HCX> ToStableHashKey<HCX> for LintId {
     }
 }
 
+#[derive(Debug)]
+pub struct AmbiguityErrorDiag {
+    pub msg: String,
+    pub span: Span,
+    pub label_span: Span,
+    pub label_msg: String,
+    pub note_msg: String,
+    pub b1_span: Span,
+    pub b1_note_msg: String,
+    pub b1_help_msgs: Vec<String>,
+    pub b2_span: Span,
+    pub b2_note_msg: String,
+    pub b2_help_msgs: Vec<String>,
+}
+
 // This could be a closure, but then implementing derive trait
 // becomes hacky (and it gets allocated).
 #[derive(Debug)]
@@ -496,7 +511,8 @@ pub enum BuiltinLintDiagnostics {
     BreakWithLabelAndLoop(Span),
     NamedAsmLabel(String),
     UnicodeTextFlow(Span, String),
-    UnexpectedCfg((Symbol, Span), Option<(Symbol, Span)>),
+    UnexpectedCfgName((Symbol, Span), Option<(Symbol, Span)>),
+    UnexpectedCfgValue((Symbol, Span), Option<(Symbol, Span)>),
     DeprecatedWhereclauseLocation(Span, String),
     SingleUseLifetime {
         /// Span of the parameter which declares this lifetime.
@@ -529,15 +545,32 @@ pub enum BuiltinLintDiagnostics {
         vis_span: Span,
         ident_span: Span,
     },
+    AmbiguousGlobImports {
+        diag: AmbiguityErrorDiag,
+    },
     AmbiguousGlobReexports {
         /// The name for which collision(s) have occurred.
         name: String,
-        /// The name space for whihc the collision(s) occurred in.
+        /// The name space for which the collision(s) occurred in.
         namespace: String,
         /// Span where the name is first re-exported.
         first_reexport_span: Span,
         /// Span where the same name is also re-exported.
         duplicate_reexport_span: Span,
+    },
+    HiddenGlobReexports {
+        /// The name of the local binding which shadows the glob re-export.
+        name: String,
+        /// The namespace for which the shadowing occurred in.
+        namespace: String,
+        /// The glob reexport that is shadowed by the local binding.
+        glob_reexport_span: Span,
+        /// The local binding that shadows the glob reexport.
+        private_item_span: Span,
+    },
+    UnusedQualifications {
+        /// The span of the unnecessarily-qualified path to remove.
+        removal_span: Span,
     },
 }
 

@@ -443,10 +443,27 @@ impl Socket {
         Ok(passcred != 0)
     }
 
-    #[cfg(not(any(target_os = "solaris", target_os = "illumos")))]
+    #[cfg(target_os = "freebsd")]
+    pub fn set_passcred(&self, passcred: bool) -> io::Result<()> {
+        setsockopt(self, libc::AF_LOCAL, libc::LOCAL_CREDS_PERSISTENT, passcred as libc::c_int)
+    }
+
+    #[cfg(target_os = "freebsd")]
+    pub fn passcred(&self) -> io::Result<bool> {
+        let passcred: libc::c_int = getsockopt(self, libc::AF_LOCAL, libc::LOCAL_CREDS_PERSISTENT)?;
+        Ok(passcred != 0)
+    }
+
+    #[cfg(not(any(target_os = "solaris", target_os = "illumos", target_os = "vita")))]
     pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
         let mut nonblocking = nonblocking as libc::c_int;
         cvt(unsafe { libc::ioctl(self.as_raw_fd(), libc::FIONBIO, &mut nonblocking) }).map(drop)
+    }
+
+    #[cfg(target_os = "vita")]
+    pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
+        let option = nonblocking as libc::c_int;
+        setsockopt(self, libc::SOL_SOCKET, libc::SO_NONBLOCK, option)
     }
 
     #[cfg(any(target_os = "solaris", target_os = "illumos"))]
@@ -479,6 +496,7 @@ impl Socket {
 }
 
 impl AsInner<FileDesc> for Socket {
+    #[inline]
     fn as_inner(&self) -> &FileDesc {
         &self.0
     }
@@ -503,6 +521,7 @@ impl AsFd for Socket {
 }
 
 impl AsRawFd for Socket {
+    #[inline]
     fn as_raw_fd(&self) -> RawFd {
         self.0.as_raw_fd()
     }

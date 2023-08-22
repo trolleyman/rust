@@ -39,7 +39,7 @@ impl<'a, Ty> Deref for TyAndLayout<'a, Ty> {
 
 /// Trait that needs to be implemented by the higher-level type representation
 /// (e.g. `rustc_middle::ty::Ty`), to provide `rustc_target::abi` functionality.
-pub trait TyAbiInterface<'a, C>: Sized {
+pub trait TyAbiInterface<'a, C>: Sized + std::fmt::Debug {
     fn ty_and_layout_for_variant(
         this: TyAndLayout<'a, Self>,
         cx: &C,
@@ -124,25 +124,24 @@ impl<'a, Ty> TyAndLayout<'a, Ty> {
     {
         Ty::is_unit(self)
     }
-}
 
-impl<'a, Ty> TyAndLayout<'a, Ty> {
-    /// Returns `true` if the layout corresponds to an unsized type.
-    pub fn is_unsized(&self) -> bool {
-        self.abi.is_unsized()
-    }
+    pub fn offset_of_subfield<C>(self, cx: &C, indices: impl Iterator<Item = usize>) -> Size
+    where
+        Ty: TyAbiInterface<'a, C>,
+    {
+        let mut layout = self;
+        let mut offset = Size::ZERO;
 
-    #[inline]
-    pub fn is_sized(&self) -> bool {
-        self.abi.is_sized()
-    }
-
-    /// Returns `true` if the type is a ZST and not unsized.
-    pub fn is_zst(&self) -> bool {
-        match self.abi {
-            Abi::Scalar(_) | Abi::ScalarPair(..) | Abi::Vector { .. } => false,
-            Abi::Uninhabited => self.size.bytes() == 0,
-            Abi::Aggregate { sized } => sized && self.size.bytes() == 0,
+        for index in indices {
+            offset += layout.fields.offset(index);
+            layout = layout.field(cx, index);
+            assert!(
+                layout.is_sized(),
+                "offset of unsized field (type {:?}) cannot be computed statically",
+                layout.ty
+            );
         }
+
+        offset
     }
 }

@@ -2,7 +2,7 @@ use super::LoweringContext;
 use rustc_ast as ast;
 use rustc_ast::visit::{self, Visitor};
 use rustc_ast::*;
-use rustc_data_structures::fx::FxIndexSet;
+use rustc_data_structures::fx::FxIndexMap;
 use rustc_hir as hir;
 use rustc_span::{
     sym,
@@ -186,7 +186,7 @@ enum ArgumentType {
 /// Generates:
 ///
 /// ```text
-///     <core::fmt::ArgumentV1>::new_…(arg)
+///     <core::fmt::Argument>::new_…(arg)
 /// ```
 fn make_argument<'hir>(
     ctx: &mut LoweringContext<'_, 'hir>,
@@ -220,25 +220,25 @@ fn make_argument<'hir>(
 /// Generates:
 ///
 /// ```text
-///     <core::fmt::rt::v1::Count>::Is(…)
+///     <core::fmt::rt::Count>::Is(…)
 /// ```
 ///
 /// or
 ///
 /// ```text
-///     <core::fmt::rt::v1::Count>::Param(…)
+///     <core::fmt::rt::Count>::Param(…)
 /// ```
 ///
 /// or
 ///
 /// ```text
-///     <core::fmt::rt::v1::Count>::Implied
+///     <core::fmt::rt::Count>::Implied
 /// ```
 fn make_count<'hir>(
     ctx: &mut LoweringContext<'_, 'hir>,
     sp: Span,
     count: &Option<FormatCount>,
-    argmap: &mut FxIndexSet<(usize, ArgumentType)>,
+    argmap: &mut FxIndexMap<(usize, ArgumentType), Option<Span>>,
 ) -> hir::Expr<'hir> {
     match count {
         Some(FormatCount::Literal(n)) => {
@@ -252,7 +252,7 @@ fn make_count<'hir>(
         }
         Some(FormatCount::Argument(arg)) => {
             if let Ok(arg_index) = arg.index {
-                let (i, _) = argmap.insert_full((arg_index, ArgumentType::Usize));
+                let (i, _) = argmap.insert_full((arg_index, ArgumentType::Usize), arg.span);
                 let count_param = ctx.arena.alloc(ctx.expr_lang_item_type_relative(
                     sp,
                     hir::LangItem::FormatCount,
@@ -278,25 +278,27 @@ fn make_count<'hir>(
 /// Generates
 ///
 /// ```text
-///     <core::fmt::rt::v1::Argument::new(
+///     <core::fmt::rt::Placeholder::new(
 ///         …usize, // position
 ///         '…', // fill
-///         <core::fmt::rt::v1::Alignment>::…, // alignment
+///         <core::fmt::rt::Alignment>::…, // alignment
 ///         …u32, // flags
-///         <core::fmt::rt::v1::Count::…>, // width
-///         <core::fmt::rt::v1::Count::…>, // precision
+///         <core::fmt::rt::Count::…>, // width
+///         <core::fmt::rt::Count::…>, // precision
 ///     )
 /// ```
 fn make_format_spec<'hir>(
     ctx: &mut LoweringContext<'_, 'hir>,
     sp: Span,
     placeholder: &FormatPlaceholder,
-    argmap: &mut FxIndexSet<(usize, ArgumentType)>,
+    argmap: &mut FxIndexMap<(usize, ArgumentType), Option<Span>>,
 ) -> hir::Expr<'hir> {
     let position = match placeholder.argument.index {
         Ok(arg_index) => {
-            let (i, _) =
-                argmap.insert_full((arg_index, ArgumentType::Format(placeholder.format_trait)));
+            let (i, _) = argmap.insert_full(
+                (arg_index, ArgumentType::Format(placeholder.format_trait)),
+                placeholder.span,
+            );
             ctx.expr_usize(sp, i)
         }
         Err(_) => ctx.expr(
@@ -325,7 +327,7 @@ fn make_format_spec<'hir>(
             None => sym::Unknown,
         },
     );
-    // This needs to match `FlagV1` in library/core/src/fmt/mod.rs.
+    // This needs to match `Flag` in library/core/src/fmt/rt.rs.
     let flags: u32 = ((sign == Some(FormatSign::Plus)) as u32)
         | ((sign == Some(FormatSign::Minus)) as u32) << 1
         | (alternate as u32) << 2
@@ -386,7 +388,7 @@ fn expand_format_args<'hir>(
 
     // Create a list of all _unique_ (argument, format trait) combinations.
     // E.g. "{0} {0:x} {0} {1}" -> [(0, Display), (0, LowerHex), (1, Display)]
-    let mut argmap = FxIndexSet::default();
+    let mut argmap = FxIndexMap::default();
     for piece in &fmt.template {
         let FormatArgsPiece::Placeholder(placeholder) = piece else { continue };
         if placeholder.format_options != Default::default() {
@@ -394,7 +396,10 @@ fn expand_format_args<'hir>(
             use_format_options = true;
         }
         if let Ok(index) = placeholder.argument.index {
-            if !argmap.insert((index, ArgumentType::Format(placeholder.format_trait))) {
+            if argmap
+                .insert((index, ArgumentType::Format(placeholder.format_trait)), placeholder.span)
+                .is_some()
+            {
                 // Duplicate (argument, format trait) combination,
                 // which we'll only put once in the args array.
                 use_format_options = true;
@@ -433,33 +438,61 @@ fn expand_format_args<'hir>(
     // If the args array contains exactly all the original arguments once,
     // in order, we can use a simple array instead of a `match` construction.
     // However, if there's a yield point in any argument except the first one,
-    // we don't do this, because an ArgumentV1 cannot be kept across yield points.
+    // we don't do this, because an Argument cannot be kept across yield points.
     //
     // This is an optimization, speeding up compilation about 1-2% in some cases.
     // See https://github.com/rust-lang/rust/pull/106770#issuecomment-1380790609
     let use_simple_array = argmap.len() == arguments.len()
-        && argmap.iter().enumerate().all(|(i, &(j, _))| i == j)
+        && argmap.iter().enumerate().all(|(i, (&(j, _), _))| i == j)
         && arguments.iter().skip(1).all(|arg| !may_contain_yield_point(&arg.expr));
 
-    let args = if use_simple_array {
+    let args = if arguments.is_empty() {
+        // Generate:
+        //    &<core::fmt::Argument>::none()
+        //
+        // Note:
+        //     `none()` just returns `[]`. We use `none()` rather than `[]` to limit the lifetime.
+        //
+        //     This makes sure that this still fails to compile, even when the argument is inlined:
+        //
+        //     ```
+        //     let f = format_args!("{}", "a");
+        //     println!("{f}"); // error E0716
+        //     ```
+        //
+        //     Cases where keeping the object around is allowed, such as `format_args!("a")`,
+        //     are handled above by the `allow_const` case.
+        let none_fn = ctx.arena.alloc(ctx.expr_lang_item_type_relative(
+            macsp,
+            hir::LangItem::FormatArgument,
+            sym::none,
+        ));
+        let none = ctx.expr_call(macsp, none_fn, &[]);
+        ctx.expr(macsp, hir::ExprKind::AddrOf(hir::BorrowKind::Ref, hir::Mutability::Not, none))
+    } else if use_simple_array {
         // Generate:
         //     &[
-        //         <core::fmt::ArgumentV1>::new_display(&arg0),
-        //         <core::fmt::ArgumentV1>::new_lower_hex(&arg1),
-        //         <core::fmt::ArgumentV1>::new_debug(&arg2),
+        //         <core::fmt::Argument>::new_display(&arg0),
+        //         <core::fmt::Argument>::new_lower_hex(&arg1),
+        //         <core::fmt::Argument>::new_debug(&arg2),
         //         …
         //     ]
         let elements: Vec<_> = arguments
             .iter()
             .zip(argmap)
-            .map(|(arg, (_, ty))| {
-                let sp = arg.expr.span.with_ctxt(macsp.ctxt());
+            .map(|(arg, ((_, ty), placeholder_span))| {
+                let placeholder_span =
+                    placeholder_span.unwrap_or(arg.expr.span).with_ctxt(macsp.ctxt());
+                let arg_span = match arg.kind {
+                    FormatArgumentKind::Captured(_) => placeholder_span,
+                    _ => arg.expr.span.with_ctxt(macsp.ctxt()),
+                };
                 let arg = ctx.lower_expr(&arg.expr);
                 let ref_arg = ctx.arena.alloc(ctx.expr(
-                    sp,
+                    arg_span,
                     hir::ExprKind::AddrOf(hir::BorrowKind::Ref, hir::Mutability::Not, arg),
                 ));
-                make_argument(ctx, sp, ref_arg, ty)
+                make_argument(ctx, placeholder_span, ref_arg, ty)
             })
             .collect();
         ctx.expr_array_ref(macsp, ctx.arena.alloc_from_iter(elements))
@@ -467,24 +500,34 @@ fn expand_format_args<'hir>(
         // Generate:
         //     &match (&arg0, &arg1, &…) {
         //         args => [
-        //             <core::fmt::ArgumentV1>::new_display(args.0),
-        //             <core::fmt::ArgumentV1>::new_lower_hex(args.1),
-        //             <core::fmt::ArgumentV1>::new_debug(args.0),
+        //             <core::fmt::Argument>::new_display(args.0),
+        //             <core::fmt::Argument>::new_lower_hex(args.1),
+        //             <core::fmt::Argument>::new_debug(args.0),
         //             …
         //         ]
         //     }
         let args_ident = Ident::new(sym::args, macsp);
         let (args_pat, args_hir_id) = ctx.pat_ident(macsp, args_ident);
-        let args = ctx.arena.alloc_from_iter(argmap.iter().map(|&(arg_index, ty)| {
-            let arg = &arguments[arg_index];
-            let sp = arg.expr.span.with_ctxt(macsp.ctxt());
-            let args_ident_expr = ctx.expr_ident(macsp, args_ident, args_hir_id);
-            let arg = ctx.arena.alloc(ctx.expr(
-                sp,
-                hir::ExprKind::Field(args_ident_expr, Ident::new(sym::integer(arg_index), macsp)),
-            ));
-            make_argument(ctx, sp, arg, ty)
-        }));
+        let args = ctx.arena.alloc_from_iter(argmap.iter().map(
+            |(&(arg_index, ty), &placeholder_span)| {
+                let arg = &arguments[arg_index];
+                let placeholder_span =
+                    placeholder_span.unwrap_or(arg.expr.span).with_ctxt(macsp.ctxt());
+                let arg_span = match arg.kind {
+                    FormatArgumentKind::Captured(_) => placeholder_span,
+                    _ => arg.expr.span.with_ctxt(macsp.ctxt()),
+                };
+                let args_ident_expr = ctx.expr_ident(macsp, args_ident, args_hir_id);
+                let arg = ctx.arena.alloc(ctx.expr(
+                    arg_span,
+                    hir::ExprKind::Field(
+                        args_ident_expr,
+                        Ident::new(sym::integer(arg_index), macsp),
+                    ),
+                ));
+                make_argument(ctx, placeholder_span, arg, ty)
+            },
+        ));
         let elements: Vec<_> = arguments
             .iter()
             .map(|arg| {
@@ -563,7 +606,7 @@ fn may_contain_yield_point(e: &ast::Expr) -> bool {
 
     impl Visitor<'_> for MayContainYieldPoint {
         fn visit_expr(&mut self, e: &ast::Expr) {
-            if let ast::ExprKind::Await(_) | ast::ExprKind::Yield(_) = e.kind {
+            if let ast::ExprKind::Await(_, _) | ast::ExprKind::Yield(_) = e.kind {
                 self.0 = true;
             } else {
                 visit::walk_expr(self, e);

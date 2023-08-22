@@ -30,8 +30,6 @@ use super::*;
 use rustc_middle::ty::relate::{Relate, TypeRelation};
 use rustc_middle::ty::{Const, ImplSubject};
 
-use std::cell::Cell;
-
 /// Whether we should define opaque types or just treat them opaquely.
 ///
 /// Currently only used to prevent predicate matching from matching anything
@@ -42,6 +40,7 @@ pub enum DefineOpaqueTypes {
     No,
 }
 
+#[derive(Clone, Copy)]
 pub struct At<'a, 'tcx> {
     pub infcx: &'a InferCtxt<'tcx>,
     pub cause: &'a ObligationCause<'tcx>,
@@ -72,8 +71,8 @@ impl<'tcx> InferCtxt<'tcx> {
             tcx: self.tcx,
             defining_use_anchor: self.defining_use_anchor,
             considering_regions: self.considering_regions,
+            skip_leak_check: self.skip_leak_check,
             inner: self.inner.clone(),
-            skip_leak_check: self.skip_leak_check.clone(),
             lexical_region_resolutions: self.lexical_region_resolutions.clone(),
             selection_cache: self.selection_cache.clone(),
             evaluation_cache: self.evaluation_cache.clone(),
@@ -81,10 +80,9 @@ impl<'tcx> InferCtxt<'tcx> {
             reported_closure_mismatch: self.reported_closure_mismatch.clone(),
             tainted_by_errors: self.tainted_by_errors.clone(),
             err_count_on_creation: self.err_count_on_creation,
-            in_snapshot: self.in_snapshot.clone(),
             universe: self.universe.clone(),
             intercrate: self.intercrate,
-            inside_canonicalization_ctxt: Cell::new(self.inside_canonicalization_ctxt()),
+            next_trait_solver: self.next_trait_solver,
         }
     }
 }
@@ -481,5 +479,33 @@ impl<'tcx> ToTrace<'tcx> for ty::FnSig<'tcx> {
         b: Self,
     ) -> TypeTrace<'tcx> {
         TypeTrace { cause: cause.clone(), values: Sigs(ExpectedFound::new(a_is_expected, a, b)) }
+    }
+}
+
+impl<'tcx> ToTrace<'tcx> for ty::PolyExistentialTraitRef<'tcx> {
+    fn to_trace(
+        cause: &ObligationCause<'tcx>,
+        a_is_expected: bool,
+        a: Self,
+        b: Self,
+    ) -> TypeTrace<'tcx> {
+        TypeTrace {
+            cause: cause.clone(),
+            values: ExistentialTraitRef(ExpectedFound::new(a_is_expected, a, b)),
+        }
+    }
+}
+
+impl<'tcx> ToTrace<'tcx> for ty::PolyExistentialProjection<'tcx> {
+    fn to_trace(
+        cause: &ObligationCause<'tcx>,
+        a_is_expected: bool,
+        a: Self,
+        b: Self,
+    ) -> TypeTrace<'tcx> {
+        TypeTrace {
+            cause: cause.clone(),
+            values: ExistentialProjection(ExpectedFound::new(a_is_expected, a, b)),
+        }
     }
 }

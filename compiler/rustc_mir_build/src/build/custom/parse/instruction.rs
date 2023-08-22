@@ -3,7 +3,7 @@ use rustc_middle::mir::tcx::PlaceTy;
 use rustc_middle::ty::cast::mir_cast_kind;
 use rustc_middle::{mir::*, thir::*, ty};
 use rustc_span::Span;
-use rustc_target::abi::VariantIdx;
+use rustc_target::abi::{FieldIdx, VariantIdx};
 
 use crate::build::custom::ParseError;
 use crate::build::expr::as_constant::as_constant_inner;
@@ -56,15 +56,14 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                 Ok(TerminatorKind::Drop {
                     place: self.parse_place(args[0])?,
                     target: self.parse_block(args[1])?,
-                    unwind: None,
+                    unwind: UnwindAction::Continue,
+                    replace: false,
                 })
             },
             @call("mir_call", args) => {
-                let destination = self.parse_place(args[0])?;
-                let target = self.parse_block(args[1])?;
-                self.parse_call(args[2], destination, target)
+                self.parse_call(args)
             },
-            ExprKind::Match { scrutinee, arms } => {
+            ExprKind::Match { scrutinee, arms, .. } => {
                 let discr = self.parse_operand(*scrutinee)?;
                 self.parse_match(arms, expr.span).map(|t| TerminatorKind::SwitchInt { discr, targets: t })
             },
@@ -77,7 +76,7 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                 span,
                 item_description: "no arms".to_string(),
                 expected: "at least one arm".to_string(),
-            })
+            });
         };
 
         let otherwise = &self.thir[*otherwise];
@@ -86,7 +85,7 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                 span: otherwise.span,
                 item_description: format!("{:?}", otherwise.pattern.kind),
                 expected: "wildcard pattern".to_string(),
-            })
+            });
         };
         let otherwise = self.parse_block(otherwise.body)?;
 
@@ -99,7 +98,7 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                     span: arm.pattern.span,
                     item_description: format!("{:?}", arm.pattern.kind),
                     expected: "constant pattern".to_string(),
-                })
+                });
             };
             values.push(value.eval_bits(self.tcx, self.param_env, arm.pattern.ty));
             targets.push(self.parse_block(arm.body)?);
@@ -108,13 +107,14 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
         Ok(SwitchTargets::new(values.into_iter().zip(targets), otherwise))
     }
 
-    fn parse_call(
-        &self,
-        expr_id: ExprId,
-        destination: Place<'tcx>,
-        target: BasicBlock,
-    ) -> PResult<TerminatorKind<'tcx>> {
-        parse_by_kind!(self, expr_id, _, "function call",
+    fn parse_call(&self, args: &[ExprId]) -> PResult<TerminatorKind<'tcx>> {
+        let (destination, call) = parse_by_kind!(self, args[0], _, "function call",
+            ExprKind::Assign { lhs, rhs } => (*lhs, *rhs),
+        );
+        let destination = self.parse_place(destination)?;
+        let target = self.parse_block(args[1])?;
+
+        parse_by_kind!(self, call, _, "function call",
             ExprKind::Call { fun, args, from_hir_call, fn_span, .. } => {
                 let fun = self.parse_operand(*fun)?;
                 let args = args
@@ -126,8 +126,10 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                     args,
                     destination,
                     target: Some(target),
-                    cleanup: None,
-                    from_hir_call: *from_hir_call,
+                    unwind: UnwindAction::Continue,
+                    call_source: if *from_hir_call { CallSource::Normal } else {
+                        CallSource::OverloadedOperator
+                    },
                     fn_span: *fn_span,
                 })
             },
@@ -148,7 +150,13 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                     )),
                 )
             },
+            @call("mir_offset", args) => {
+                let ptr = self.parse_operand(args[0])?;
+                let offset = self.parse_operand(args[1])?;
+                Ok(Rvalue::BinaryOp(BinOp::Offset, Box::new((ptr, offset))))
+            },
             @call("mir_len", args) => Ok(Rvalue::Len(self.parse_place(args[0])?)),
+            @call("mir_copy_for_deref", args) => Ok(Rvalue::CopyForDeref(self.parse_place(args[0])?)),
             ExprKind::Borrow { borrow_kind, arg } => Ok(
                 Rvalue::Ref(self.tcx.lifetimes.re_erased, *borrow_kind, self.parse_place(*arg)?)
             ),
@@ -183,12 +191,12 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
                     fields.iter().map(|e| self.parse_operand(*e)).collect::<Result<_, _>>()?
                 ))
             },
-            ExprKind::Adt(box AdtExpr{ adt_def, variant_index, substs, fields, .. }) => {
+            ExprKind::Adt(box AdtExpr{ adt_def, variant_index, args, fields, .. }) => {
                 let is_union = adt_def.is_union();
-                let active_field_index = is_union.then(|| fields[0].name.index());
+                let active_field_index = is_union.then(|| fields[0].name);
 
                 Ok(Rvalue::Aggregate(
-                    Box::new(AggregateKind::Adt(adt_def.did(), *variant_index, substs, None, active_field_index)),
+                    Box::new(AggregateKind::Adt(adt_def.did(), *variant_index, args, None, active_field_index)),
                     fields.iter().map(|f| self.parse_operand(f.expr)).collect::<Result<_, _>>()?
                 ))
             },
@@ -223,7 +231,7 @@ impl<'tcx, 'body> ParseCtxt<'tcx, 'body> {
         let (parent, proj) = parse_by_kind!(self, expr_id, expr, "place",
             @call("mir_field", args) => {
                 let (parent, ty) = self.parse_place_inner(args[0])?;
-                let field = Field::from_u32(self.parse_integer_literal(args[1])? as u32);
+                let field = FieldIdx::from_u32(self.parse_integer_literal(args[1])? as u32);
                 let field_ty = ty.field_ty(self.tcx, field);
                 let proj = PlaceElem::Field(field, field_ty);
                 let place = parent.project_deeper(&[proj], self.tcx);

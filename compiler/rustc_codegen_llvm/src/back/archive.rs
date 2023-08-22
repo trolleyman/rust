@@ -56,7 +56,7 @@ fn llvm_machine_type(cpu: &str) -> LLVMMachineType {
         "x86" => LLVMMachineType::I386,
         "aarch64" => LLVMMachineType::ARM64,
         "arm" => LLVMMachineType::ARM,
-        _ => panic!("unsupported cpu type {}", cpu),
+        _ => panic!("unsupported cpu type {cpu}"),
     }
 }
 
@@ -110,7 +110,7 @@ impl ArchiveBuilderBuilder for LlvmArchiveBuilderBuilder {
     fn new_archive_builder<'a>(&self, sess: &'a Session) -> Box<dyn ArchiveBuilder<'a> + 'a> {
         // FIXME use ArArchiveBuilder on most targets again once reading thin archives is
         // implemented
-        if true || sess.target.arch == "wasm32" || sess.target.arch == "wasm64" {
+        if true {
             Box::new(LlvmArchiveBuilder { sess, additions: Vec::new() })
         } else {
             Box::new(ArArchiveBuilder::new(sess, get_llvm_object_symbols))
@@ -128,7 +128,7 @@ impl ArchiveBuilderBuilder for LlvmArchiveBuilderBuilder {
         let name_suffix = if is_direct_dependency { "_imports" } else { "_imports_indirect" };
         let output_path = {
             let mut output_path: PathBuf = tmpdir.to_path_buf();
-            output_path.push(format!("{}{}", lib_name, name_suffix));
+            output_path.push(format!("{lib_name}{name_suffix}"));
             output_path.with_extension("lib")
         };
 
@@ -156,7 +156,7 @@ impl ArchiveBuilderBuilder for LlvmArchiveBuilderBuilder {
             // functions. Therefore, use binutils to create the import library instead,
             // by writing a .DEF file to the temp dir and calling binutils's dlltool.
             let def_file_path =
-                tmpdir.join(format!("{}{}", lib_name, name_suffix)).with_extension("def");
+                tmpdir.join(format!("{lib_name}{name_suffix}")).with_extension("def");
 
             let def_file_content = format!(
                 "EXPORTS\n{}",
@@ -164,7 +164,7 @@ impl ArchiveBuilderBuilder for LlvmArchiveBuilderBuilder {
                     .into_iter()
                     .map(|(name, ordinal)| {
                         match ordinal {
-                            Some(n) => format!("{} @{} NONAME", name, n),
+                            Some(n) => format!("{name} @{n} NONAME"),
                             None => name,
                         }
                     })
@@ -198,30 +198,39 @@ impl ArchiveBuilderBuilder for LlvmArchiveBuilderBuilder {
                 "arm" => ("arm", "--32"),
                 _ => panic!("unsupported arch {}", sess.target.arch),
             };
-            let result = std::process::Command::new(dlltool)
-                .args([
-                    "-d",
-                    def_file_path.to_str().unwrap(),
-                    "-D",
-                    lib_name,
-                    "-l",
-                    output_path.to_str().unwrap(),
-                    "-m",
-                    dlltool_target_arch,
-                    "-f",
-                    dlltool_target_bitness,
-                    "--no-leading-underscore",
-                    "--temp-prefix",
-                    temp_prefix.to_str().unwrap(),
-                ])
-                .output();
+            let mut dlltool_cmd = std::process::Command::new(&dlltool);
+            dlltool_cmd.args([
+                "-d",
+                def_file_path.to_str().unwrap(),
+                "-D",
+                lib_name,
+                "-l",
+                output_path.to_str().unwrap(),
+                "-m",
+                dlltool_target_arch,
+                "-f",
+                dlltool_target_bitness,
+                "--no-leading-underscore",
+                "--temp-prefix",
+                temp_prefix.to_str().unwrap(),
+            ]);
 
-            match result {
+            match dlltool_cmd.output() {
                 Err(e) => {
-                    sess.emit_fatal(ErrorCallingDllTool { error: e });
+                    sess.emit_fatal(ErrorCallingDllTool {
+                        dlltool_path: dlltool.to_string_lossy(),
+                        error: e,
+                    });
                 }
-                Ok(output) if !output.status.success() => {
+                // dlltool returns '0' on failure, so check for error output instead.
+                Ok(output) if !output.stderr.is_empty() => {
                     sess.emit_fatal(DlltoolFailImportLibrary {
+                        dlltool_path: dlltool.to_string_lossy(),
+                        dlltool_args: dlltool_cmd
+                            .get_args()
+                            .map(|arg| arg.to_string_lossy())
+                            .collect::<Vec<_>>()
+                            .join(" "),
                         stdout: String::from_utf8_lossy(&output.stdout),
                         stderr: String::from_utf8_lossy(&output.stderr),
                     })
@@ -426,12 +435,12 @@ impl<'a> LlvmArchiveBuilder<'a> {
 }
 
 fn string_to_io_error(s: String) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, format!("bad archive: {}", s))
+    io::Error::new(io::ErrorKind::Other, format!("bad archive: {s}"))
 }
 
 fn find_binutils_dlltool(sess: &Session) -> OsString {
     assert!(sess.target.options.is_like_windows && !sess.target.options.is_like_msvc);
-    if let Some(dlltool_path) = &sess.opts.unstable_opts.dlltool {
+    if let Some(dlltool_path) = &sess.opts.cg.dlltool {
         return dlltool_path.clone().into_os_string();
     }
 

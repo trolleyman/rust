@@ -63,15 +63,10 @@ fn one_ignored_one_unignored_test() -> Vec<TestDescAndFn> {
                 name: StaticTestName("1"),
                 ignore: true,
                 ignore_message: None,
-                #[cfg(not(bootstrap))]
                 source_file: "",
-                #[cfg(not(bootstrap))]
                 start_line: 0,
-                #[cfg(not(bootstrap))]
                 start_col: 0,
-                #[cfg(not(bootstrap))]
                 end_line: 0,
-                #[cfg(not(bootstrap))]
                 end_col: 0,
                 should_panic: ShouldPanic::No,
                 compile_fail: false,
@@ -85,15 +80,10 @@ fn one_ignored_one_unignored_test() -> Vec<TestDescAndFn> {
                 name: StaticTestName("2"),
                 ignore: false,
                 ignore_message: None,
-                #[cfg(not(bootstrap))]
                 source_file: "",
-                #[cfg(not(bootstrap))]
                 start_line: 0,
-                #[cfg(not(bootstrap))]
                 start_col: 0,
-                #[cfg(not(bootstrap))]
                 end_line: 0,
-                #[cfg(not(bootstrap))]
                 end_col: 0,
                 should_panic: ShouldPanic::No,
                 compile_fail: false,
@@ -115,15 +105,10 @@ pub fn do_not_run_ignored_tests() {
             name: StaticTestName("whatever"),
             ignore: true,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::No,
             compile_fail: false,
@@ -148,15 +133,10 @@ pub fn ignored_tests_result_in_ignored() {
             name: StaticTestName("whatever"),
             ignore: true,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::No,
             compile_fail: false,
@@ -174,6 +154,7 @@ pub fn ignored_tests_result_in_ignored() {
 // FIXME: Re-enable emscripten once it can catch panics again (introduced by #65251)
 #[test]
 #[cfg(not(target_os = "emscripten"))]
+#[cfg_attr(not(panic = "unwind"), ignore = "test requires unwinding support")]
 fn test_should_panic() {
     fn f() -> Result<(), String> {
         panic!();
@@ -183,15 +164,10 @@ fn test_should_panic() {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::Yes,
             compile_fail: false,
@@ -209,6 +185,7 @@ fn test_should_panic() {
 // FIXME: Re-enable emscripten once it can catch panics again (introduced by #65251)
 #[test]
 #[cfg(not(target_os = "emscripten"))]
+#[cfg_attr(not(panic = "unwind"), ignore = "test requires unwinding support")]
 fn test_should_panic_good_message() {
     fn f() -> Result<(), String> {
         panic!("an error message");
@@ -218,15 +195,10 @@ fn test_should_panic_good_message() {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::YesWithMessage("error message"),
             compile_fail: false,
@@ -244,6 +216,7 @@ fn test_should_panic_good_message() {
 // FIXME: Re-enable emscripten once it can catch panics again (introduced by #65251)
 #[test]
 #[cfg(not(target_os = "emscripten"))]
+#[cfg_attr(not(panic = "unwind"), ignore = "test requires unwinding support")]
 fn test_should_panic_bad_message() {
     use crate::tests::TrFailedMsg;
     fn f() -> Result<(), String> {
@@ -258,15 +231,10 @@ fn test_should_panic_bad_message() {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::YesWithMessage(expected),
             compile_fail: false,
@@ -284,6 +252,7 @@ fn test_should_panic_bad_message() {
 // FIXME: Re-enable emscripten once it can catch panics again (introduced by #65251)
 #[test]
 #[cfg(not(target_os = "emscripten"))]
+#[cfg_attr(not(panic = "unwind"), ignore = "test requires unwinding support")]
 fn test_should_panic_non_string_message_type() {
     use crate::tests::TrFailedMsg;
     use std::any::TypeId;
@@ -302,15 +271,10 @@ fn test_should_panic_non_string_message_type() {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::YesWithMessage(expected),
             compile_fail: false,
@@ -328,6 +292,7 @@ fn test_should_panic_non_string_message_type() {
 // FIXME: Re-enable emscripten once it can catch panics again (introduced by #65251)
 #[test]
 #[cfg(not(target_os = "emscripten"))]
+#[cfg_attr(not(panic = "unwind"), ignore = "test requires unwinding support")]
 fn test_should_panic_but_succeeds() {
     let should_panic_variants = [ShouldPanic::Yes, ShouldPanic::YesWithMessage("error message")];
 
@@ -340,15 +305,10 @@ fn test_should_panic_but_succeeds() {
                 name: StaticTestName("whatever"),
                 ignore: false,
                 ignore_message: None,
-                #[cfg(not(bootstrap))]
                 source_file: "",
-                #[cfg(not(bootstrap))]
                 start_line: 0,
-                #[cfg(not(bootstrap))]
                 start_col: 0,
-                #[cfg(not(bootstrap))]
                 end_line: 0,
-                #[cfg(not(bootstrap))]
                 end_col: 0,
                 should_panic,
                 compile_fail: false,
@@ -378,15 +338,10 @@ fn report_time_test_template(report_time: bool) -> Option<TestExecTime> {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::No,
             compile_fail: false,
@@ -425,15 +380,10 @@ fn time_test_failure_template(test_type: TestType) -> TestResult {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::No,
             compile_fail: false,
@@ -474,15 +424,10 @@ fn typed_test_desc(test_type: TestType) -> TestDesc {
         name: StaticTestName("whatever"),
         ignore: false,
         ignore_message: None,
-        #[cfg(not(bootstrap))]
         source_file: "",
-        #[cfg(not(bootstrap))]
         start_line: 0,
-        #[cfg(not(bootstrap))]
         start_col: 0,
-        #[cfg(not(bootstrap))]
         end_line: 0,
-        #[cfg(not(bootstrap))]
         end_col: 0,
         should_panic: ShouldPanic::No,
         compile_fail: false,
@@ -596,15 +541,10 @@ pub fn exclude_should_panic_option() {
             name: StaticTestName("3"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::Yes,
             compile_fail: false,
@@ -630,15 +570,10 @@ pub fn exact_filter_match() {
                     name: StaticTestName(name),
                     ignore: false,
                     ignore_message: None,
-                    #[cfg(not(bootstrap))]
                     source_file: "",
-                    #[cfg(not(bootstrap))]
                     start_line: 0,
-                    #[cfg(not(bootstrap))]
                     start_col: 0,
-                    #[cfg(not(bootstrap))]
                     end_line: 0,
-                    #[cfg(not(bootstrap))]
                     end_col: 0,
                     should_panic: ShouldPanic::No,
                     compile_fail: false,
@@ -731,15 +666,10 @@ fn sample_tests() -> Vec<TestDescAndFn> {
                 name: DynTestName((*name).clone()),
                 ignore: false,
                 ignore_message: None,
-                #[cfg(not(bootstrap))]
                 source_file: "",
-                #[cfg(not(bootstrap))]
                 start_line: 0,
-                #[cfg(not(bootstrap))]
                 start_col: 0,
-                #[cfg(not(bootstrap))]
                 end_line: 0,
-                #[cfg(not(bootstrap))]
                 end_col: 0,
                 should_panic: ShouldPanic::No,
                 compile_fail: false,
@@ -870,15 +800,10 @@ pub fn test_bench_no_iter() {
         name: StaticTestName("f"),
         ignore: false,
         ignore_message: None,
-        #[cfg(not(bootstrap))]
         source_file: "",
-        #[cfg(not(bootstrap))]
         start_line: 0,
-        #[cfg(not(bootstrap))]
         start_col: 0,
-        #[cfg(not(bootstrap))]
         end_line: 0,
-        #[cfg(not(bootstrap))]
         end_col: 0,
         should_panic: ShouldPanic::No,
         compile_fail: false,
@@ -903,15 +828,10 @@ pub fn test_bench_iter() {
         name: StaticTestName("f"),
         ignore: false,
         ignore_message: None,
-        #[cfg(not(bootstrap))]
         source_file: "",
-        #[cfg(not(bootstrap))]
         start_line: 0,
-        #[cfg(not(bootstrap))]
         start_col: 0,
-        #[cfg(not(bootstrap))]
         end_line: 0,
-        #[cfg(not(bootstrap))]
         end_col: 0,
         should_panic: ShouldPanic::No,
         compile_fail: false,
@@ -929,15 +849,10 @@ fn should_sort_failures_before_printing_them() {
         name: StaticTestName("a"),
         ignore: false,
         ignore_message: None,
-        #[cfg(not(bootstrap))]
         source_file: "",
-        #[cfg(not(bootstrap))]
         start_line: 0,
-        #[cfg(not(bootstrap))]
         start_col: 0,
-        #[cfg(not(bootstrap))]
         end_line: 0,
-        #[cfg(not(bootstrap))]
         end_col: 0,
         should_panic: ShouldPanic::No,
         compile_fail: false,
@@ -949,15 +864,10 @@ fn should_sort_failures_before_printing_them() {
         name: StaticTestName("b"),
         ignore: false,
         ignore_message: None,
-        #[cfg(not(bootstrap))]
         source_file: "",
-        #[cfg(not(bootstrap))]
         start_line: 0,
-        #[cfg(not(bootstrap))]
         start_col: 0,
-        #[cfg(not(bootstrap))]
         end_line: 0,
-        #[cfg(not(bootstrap))]
         end_col: 0,
         should_panic: ShouldPanic::No,
         compile_fail: false,
@@ -1006,15 +916,10 @@ fn test_dyn_bench_returning_err_fails_when_run_as_test() {
             name: StaticTestName("whatever"),
             ignore: false,
             ignore_message: None,
-            #[cfg(not(bootstrap))]
             source_file: "",
-            #[cfg(not(bootstrap))]
             start_line: 0,
-            #[cfg(not(bootstrap))]
             start_col: 0,
-            #[cfg(not(bootstrap))]
             end_line: 0,
-            #[cfg(not(bootstrap))]
             end_col: 0,
             should_panic: ShouldPanic::No,
             compile_fail: false,

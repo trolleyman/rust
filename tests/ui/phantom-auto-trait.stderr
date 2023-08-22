@@ -6,12 +6,14 @@ LL |     is_zen(x)
    |     |
    |     required by a bound introduced by this call
    |
+   = note: consider using `std::sync::Arc<T>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: required for `&T` to implement `Zen`
   --> $DIR/phantom-auto-trait.rs:10:24
    |
 LL | unsafe impl<'a, T: 'a> Zen for &'a T where T: Sync {}
    |                        ^^^     ^^^^^          ---- unsatisfied trait bound introduced here
-   = note: required because it appears within the type `PhantomData<&T>`
+note: required because it appears within the type `PhantomData<&T>`
+  --> $SRC_DIR/core/src/marker.rs:LL:COL
 note: required because it appears within the type `Guard<'_, T>`
   --> $DIR/phantom-auto-trait.rs:12:8
    |
@@ -35,12 +37,14 @@ LL |     is_zen(x)
    |     |
    |     required by a bound introduced by this call
    |
+   = note: consider using `std::sync::Arc<T>`; for more information visit <https://doc.rust-lang.org/book/ch16-03-shared-state.html>
 note: required for `&T` to implement `Zen`
   --> $DIR/phantom-auto-trait.rs:10:24
    |
 LL | unsafe impl<'a, T: 'a> Zen for &'a T where T: Sync {}
    |                        ^^^     ^^^^^          ---- unsatisfied trait bound introduced here
-   = note: required because it appears within the type `PhantomData<&T>`
+note: required because it appears within the type `PhantomData<&T>`
+  --> $SRC_DIR/core/src/marker.rs:LL:COL
 note: required because it appears within the type `Guard<'_, T>`
   --> $DIR/phantom-auto-trait.rs:12:8
    |

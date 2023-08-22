@@ -211,6 +211,7 @@ pub struct Child {
 impl crate::sealed::Sealed for Child {}
 
 impl AsInner<imp::Process> for Child {
+    #[inline]
     fn as_inner(&self) -> &imp::Process {
         &self.handle
     }
@@ -279,6 +280,7 @@ impl Write for ChildStdin {
         io::Write::is_write_vectored(&&*self)
     }
 
+    #[inline]
     fn flush(&mut self) -> io::Result<()> {
         (&*self).flush()
     }
@@ -298,12 +300,14 @@ impl Write for &ChildStdin {
         self.inner.is_write_vectored()
     }
 
+    #[inline]
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
 
 impl AsInner<AnonPipe> for ChildStdin {
+    #[inline]
     fn as_inner(&self) -> &AnonPipe {
         &self.inner
     }
@@ -373,6 +377,7 @@ impl Read for ChildStdout {
 }
 
 impl AsInner<AnonPipe> for ChildStdout {
+    #[inline]
     fn as_inner(&self) -> &AnonPipe {
         &self.inner
     }
@@ -438,6 +443,7 @@ impl Read for ChildStderr {
 }
 
 impl AsInner<AnonPipe> for ChildStderr {
+    #[inline]
     fn as_inner(&self) -> &AnonPipe {
         &self.inner
     }
@@ -554,6 +560,14 @@ impl Command {
     /// but this has some implementation limitations on Windows
     /// (see issue #37519).
     ///
+    /// # Platform-specific behavior
+    ///
+    /// Note on Windows: For executable files with the .exe extension,
+    /// it can be omitted when specifying the program for this Command.
+    /// However, if the file has a different extension,
+    /// a filename including the extension needs to be provided,
+    /// otherwise the file won't be found.
+    ///
     /// # Examples
     ///
     /// Basic usage:
@@ -652,10 +666,19 @@ impl Command {
         self
     }
 
-    /// Inserts or updates an environment variable mapping.
+    /// Inserts or updates an explicit environment variable mapping.
     ///
-    /// Note that environment variable names are case-insensitive (but case-preserving) on Windows,
-    /// and case-sensitive on all other platforms.
+    /// This method allows you to add an environment variable mapping to the spawned process or
+    /// overwrite a previously set value. You can use [`Command::envs`] to set multiple environment
+    /// variables simultaneously.
+    ///
+    /// Child processes will inherit environment variables from their parent process by default.
+    /// Environment variables explicitly set using [`Command::env`] take precedence over inherited
+    /// variables. You can disable environment variable inheritance entirely using
+    /// [`Command::env_clear`] or for a single key using [`Command::env_remove`].
+    ///
+    /// Note that environment variable names are case-insensitive (but
+    /// case-preserving) on Windows and case-sensitive on all other platforms.
     ///
     /// # Examples
     ///
@@ -679,7 +702,19 @@ impl Command {
         self
     }
 
-    /// Adds or updates multiple environment variable mappings.
+    /// Inserts or updates multiple explicit environment variable mappings.
+    ///
+    /// This method allows you to add multiple environment variable mappings to the spawned process
+    /// or overwrite previously set values. You can use [`Command::env`] to set a single environment
+    /// variable.
+    ///
+    /// Child processes will inherit environment variables from their parent process by default.
+    /// Environment variables explicitly set using [`Command::envs`] take precedence over inherited
+    /// variables. You can disable environment variable inheritance entirely using
+    /// [`Command::env_clear`] or for a single key using [`Command::env_remove`].
+    ///
+    /// Note that environment variable names are case-insensitive (but case-preserving) on Windows
+    /// and case-sensitive on all other platforms.
     ///
     /// # Examples
     ///
@@ -716,7 +751,18 @@ impl Command {
         self
     }
 
-    /// Removes an environment variable mapping.
+    /// Removes an explicitly set environment variable and prevents inheriting it from a parent
+    /// process.
+    ///
+    /// This method will remove the explicit value of an environment variable set via
+    /// [`Command::env`] or [`Command::envs`]. In addition, it will prevent the spawned child
+    /// process from inheriting that environment variable from its parent process.
+    ///
+    /// After calling [`Command::env_remove`], the value associated with its key from
+    /// [`Command::get_envs`] will be [`None`].
+    ///
+    /// To clear all explicitly set environment variables and disable all environment variable
+    /// inheritance, you can use [`Command::env_clear`].
     ///
     /// # Examples
     ///
@@ -736,7 +782,17 @@ impl Command {
         self
     }
 
-    /// Clears the entire environment map for the child process.
+    /// Clears all explicitly set environment variables and prevents inheriting any parent process
+    /// environment variables.
+    ///
+    /// This method will remove all explicitly added environment variables set via [`Command::env`]
+    /// or [`Command::envs`]. In addition, it will prevent the spawned child process from inheriting
+    /// any environment variable from its parent process.
+    ///
+    /// After calling [`Command::env_remove`], the iterator from [`Command::get_envs`] will be
+    /// empty.
+    ///
+    /// You can use [`Command::env_remove`] to clear a single mapping.
     ///
     /// # Examples
     ///
@@ -988,17 +1044,21 @@ impl Command {
         CommandArgs { inner: self.inner.get_args() }
     }
 
-    /// Returns an iterator of the environment variables that will be set when
-    /// the process is spawned.
+    /// Returns an iterator of the environment variables explicitly set for the child process.
     ///
-    /// Each element is a tuple `(&OsStr, Option<&OsStr>)`, where the first
-    /// value is the key, and the second is the value, which is [`None`] if
-    /// the environment variable is to be explicitly removed.
+    /// Environment variables explicitly set using [`Command::env`], [`Command::envs`], and
+    /// [`Command::env_remove`] can be retrieved with this method.
     ///
-    /// This only includes environment variables explicitly set with
-    /// [`Command::env`], [`Command::envs`], and [`Command::env_remove`]. It
-    /// does not include environment variables that will be inherited by the
-    /// child process.
+    /// Note that this output does not include environment variables inherited from the parent
+    /// process.
+    ///
+    /// Each element is a tuple key/value pair `(&OsStr, Option<&OsStr>)`. A [`None`] value
+    /// indicates its key was explicitly removed via [`Command::env_remove`]. The associated key for
+    /// the [`None`] value will no longer inherit from its parent process.
+    ///
+    /// An empty iterator can indicate that no explicit mappings were added or that
+    /// [`Command::env_clear`] was called. After calling [`Command::env_clear`], the child process
+    /// will not inherit any environment variables from its parent process.
     ///
     /// # Examples
     ///
@@ -1061,12 +1121,14 @@ impl fmt::Debug for Command {
 }
 
 impl AsInner<imp::Command> for Command {
+    #[inline]
     fn as_inner(&self) -> &imp::Command {
         &self.inner
     }
 }
 
 impl AsInnerMut<imp::Command> for Command {
+    #[inline]
     fn as_inner_mut(&mut self) -> &mut imp::Command {
         &mut self.inner
     }
@@ -1472,6 +1534,15 @@ impl From<fs::File> for Stdio {
 #[stable(feature = "process", since = "1.0.0")]
 pub struct ExitStatus(imp::ExitStatus);
 
+/// The default value is one which indicates successful completion.
+#[stable(feature = "process-exitcode-default", since = "CURRENT_RUSTC_VERSION")]
+impl Default for ExitStatus {
+    fn default() -> Self {
+        // Ideally this would be done by ExitCode::default().into() but that is complicated.
+        ExitStatus::from_inner(imp::ExitStatus::default())
+    }
+}
+
 /// Allows extension traits within `std`.
 #[unstable(feature = "sealed", issue = "none")]
 impl crate::sealed::Sealed for ExitStatus {}
@@ -1559,6 +1630,7 @@ impl ExitStatus {
 }
 
 impl AsInner<imp::ExitStatus> for ExitStatus {
+    #[inline]
     fn as_inner(&self) -> &imp::ExitStatus {
         &self.0
     }
@@ -1789,7 +1861,7 @@ impl ExitCode {
     /// # use std::fmt;
     /// # enum UhOhError { GenericProblem, Specific, WithCode { exit_code: ExitCode, _x: () } }
     /// # impl fmt::Display for UhOhError {
-    /// #     fn fmt(&self, _: &mut fmt::Formatter) -> fmt::Result { unimplemented!() }
+    /// #     fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result { unimplemented!() }
     /// # }
     /// // there's no way to gracefully recover from an UhOhError, so we just
     /// // print a message and exit
@@ -1838,6 +1910,7 @@ impl From<u8> for ExitCode {
 }
 
 impl AsInner<imp::ExitCode> for ExitCode {
+    #[inline]
     fn as_inner(&self) -> &imp::ExitCode {
         &self.0
     }
@@ -1850,8 +1923,8 @@ impl FromInner<imp::ExitCode> for ExitCode {
 }
 
 impl Child {
-    /// Forces the child process to exit. If the child has already exited, an [`InvalidInput`]
-    /// error is returned.
+    /// Forces the child process to exit. If the child has already exited, `Ok(())`
+    /// is returned.
     ///
     /// The mapping to [`ErrorKind`]s is not part of the compatibility contract of the function.
     ///
@@ -1866,7 +1939,7 @@ impl Child {
     ///
     /// let mut command = Command::new("yes");
     /// if let Ok(mut child) = command.spawn() {
-    ///     child.kill().expect("command wasn't running");
+    ///     child.kill().expect("command couldn't be killed");
     /// } else {
     ///     println!("yes command didn't start");
     /// }

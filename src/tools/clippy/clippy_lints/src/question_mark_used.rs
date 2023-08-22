@@ -24,7 +24,7 @@ declare_clippy_lint! {
     /// ```ignore
     /// utility_macro!(expr);
     /// ```
-    #[clippy::version = "pre 1.29.0"]
+    #[clippy::version = "1.69.0"]
     pub QUESTION_MARK_USED,
     restriction,
     "complains if the question mark operator is used"
@@ -34,7 +34,7 @@ declare_lint_pass!(QuestionMarkUsed => [QUESTION_MARK_USED]);
 
 impl<'tcx> LateLintPass<'tcx> for QuestionMarkUsed {
     fn check_expr(&mut self, cx: &LateContext<'tcx>, expr: &'tcx Expr<'_>) {
-        if let ExprKind::Match(_, _, MatchSource::TryDesugar) = expr.kind {
+        if let ExprKind::Match(_, _, MatchSource::TryDesugar(_)) = expr.kind {
             if !span_is_local(expr.span) {
                 return;
             }

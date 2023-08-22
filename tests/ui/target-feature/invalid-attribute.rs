@@ -1,16 +1,4 @@
-// ignore-arm
-// ignore-aarch64
-// ignore-wasm
-// ignore-emscripten
-// ignore-mips
-// ignore-mips64
-// ignore-powerpc
-// ignore-powerpc64
-// ignore-powerpc64le
-// ignore-riscv64
-// ignore-s390x
-// ignore-sparc
-// ignore-sparc64
+// only-x86_64
 
 #![warn(unused_attributes)]
 

@@ -939,7 +939,7 @@ macro_rules! uint_impl {
             // SAFETY: the caller must uphold the safety contract for
             // `unchecked_shl`.
             // Any legal shift amount is losslessly representable in the self type.
-            unsafe { intrinsics::unchecked_shl(self, rhs.try_into().ok().unwrap_unchecked()) }
+            unsafe { intrinsics::unchecked_shl(self, conv_rhs_for_unchecked_shift!($SelfT, rhs)) }
         }
 
         /// Checked shift right. Computes `self >> rhs`, returning `None`
@@ -987,7 +987,7 @@ macro_rules! uint_impl {
             // SAFETY: the caller must uphold the safety contract for
             // `unchecked_shr`.
             // Any legal shift amount is losslessly representable in the self type.
-            unsafe { intrinsics::unchecked_shr(self, rhs.try_into().ok().unwrap_unchecked()) }
+            unsafe { intrinsics::unchecked_shr(self, conv_rhs_for_unchecked_shift!($SelfT, rhs)) }
         }
 
         /// Checked exponentiation. Computes `self.pow(exp)`, returning `None` if
@@ -1363,12 +1363,11 @@ macro_rules! uint_impl {
         ///
         /// Basic usage:
         ///
-        /// Please note that this example is shared between integer types.
-        /// Which explains why `i8` is used here.
-        ///
         /// ```
-        /// assert_eq!(100i8.wrapping_neg(), -100);
-        /// assert_eq!((-128i8).wrapping_neg(), -128);
+        #[doc = concat!("assert_eq!(0_", stringify!($SelfT), ".wrapping_neg(), 0);")]
+        #[doc = concat!("assert_eq!(", stringify!($SelfT), "::MAX.wrapping_neg(), 1);")]
+        #[doc = concat!("assert_eq!(13_", stringify!($SelfT), ".wrapping_neg(), (!13) + 1);")]
+        #[doc = concat!("assert_eq!(42_", stringify!($SelfT), ".wrapping_neg(), !(42 - 1));")]
         /// ```
         #[stable(feature = "num_wrapping", since = "1.2.0")]
         #[rustc_const_stable(feature = "const_wrapping_math", since = "1.32.0")]
@@ -2025,6 +2024,7 @@ macro_rules! uint_impl {
         /// ```
         #[doc = concat!("assert_eq!(7", stringify!($SelfT), ".rem_euclid(4), 3); // or any other integer type")]
         /// ```
+        #[doc(alias = "modulo", alias = "mod")]
         #[stable(feature = "euclidean_division", since = "1.38.0")]
         #[rustc_const_stable(feature = "const_euclidean_int_methods", since = "1.52.0")]
         #[must_use = "this returns the result of the operation, \
@@ -2075,10 +2075,10 @@ macro_rules! uint_impl {
         /// Basic usage:
         ///
         /// ```
-        /// #![feature(int_roundings)]
         #[doc = concat!("assert_eq!(7_", stringify!($SelfT), ".div_ceil(4), 2);")]
         /// ```
-        #[unstable(feature = "int_roundings", issue = "88581")]
+        #[stable(feature = "int_roundings1", since = "CURRENT_RUSTC_VERSION")]
+        #[rustc_const_stable(feature = "int_roundings1", since = "CURRENT_RUSTC_VERSION")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
@@ -2110,11 +2110,11 @@ macro_rules! uint_impl {
         /// Basic usage:
         ///
         /// ```
-        /// #![feature(int_roundings)]
         #[doc = concat!("assert_eq!(16_", stringify!($SelfT), ".next_multiple_of(8), 16);")]
         #[doc = concat!("assert_eq!(23_", stringify!($SelfT), ".next_multiple_of(8), 24);")]
         /// ```
-        #[unstable(feature = "int_roundings", issue = "88581")]
+        #[stable(feature = "int_roundings1", since = "CURRENT_RUSTC_VERSION")]
+        #[rustc_const_stable(feature = "int_roundings1", since = "CURRENT_RUSTC_VERSION")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]
@@ -2135,13 +2135,13 @@ macro_rules! uint_impl {
         /// Basic usage:
         ///
         /// ```
-        /// #![feature(int_roundings)]
         #[doc = concat!("assert_eq!(16_", stringify!($SelfT), ".checked_next_multiple_of(8), Some(16));")]
         #[doc = concat!("assert_eq!(23_", stringify!($SelfT), ".checked_next_multiple_of(8), Some(24));")]
         #[doc = concat!("assert_eq!(1_", stringify!($SelfT), ".checked_next_multiple_of(0), None);")]
         #[doc = concat!("assert_eq!(", stringify!($SelfT), "::MAX.checked_next_multiple_of(2), None);")]
         /// ```
-        #[unstable(feature = "int_roundings", issue = "88581")]
+        #[stable(feature = "int_roundings1", since = "CURRENT_RUSTC_VERSION")]
+        #[rustc_const_stable(feature = "int_roundings1", since = "CURRENT_RUSTC_VERSION")]
         #[must_use = "this returns the result of the operation, \
                       without modifying the original"]
         #[inline]

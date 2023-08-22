@@ -177,8 +177,8 @@ impl<'a, 'tcx, F: Write> TokenHandler<'a, 'tcx, F> {
         } else {
             // We only want to "open" the tag ourselves if we have more than one pending and if the
             // current parent tag is not the same as our pending content.
-            let close_tag = if self.pending_elems.len() > 1 && current_class.is_some() {
-                Some(enter_span(self.out, current_class.unwrap(), &self.href_context))
+            let close_tag = if self.pending_elems.len() > 1 && let Some(current_class) = current_class {
+                Some(enter_span(self.out, current_class, &self.href_context))
             } else {
                 None
             };
@@ -519,7 +519,7 @@ struct Classifier<'src> {
 
 impl<'src> Classifier<'src> {
     /// Takes as argument the source code to HTML-ify, the rust edition to use and the source code
-    /// file span which will be used later on by the `span_correspondance_map`.
+    /// file span which will be used later on by the `span_correspondence_map`.
     fn new(src: &str, file_span: Span, decoration_info: Option<DecorationInfo>) -> Classifier<'_> {
         let tokens = PeekIter::new(TokenIter::new(src));
         let decorations = decoration_info.map(Decorations::new);
@@ -654,7 +654,7 @@ impl<'src> Classifier<'src> {
     ///
     /// `before` is the position of the given token in the `source` string and is used as "lo" byte
     /// in case we want to try to generate a link for this token using the
-    /// `span_correspondance_map`.
+    /// `span_correspondence_map`.
     fn advance(
         &mut self,
         token: TokenKind,
@@ -816,7 +816,9 @@ impl<'src> Classifier<'src> {
                 | LiteralKind::Str { .. }
                 | LiteralKind::ByteStr { .. }
                 | LiteralKind::RawStr { .. }
-                | LiteralKind::RawByteStr { .. } => Class::String,
+                | LiteralKind::RawByteStr { .. }
+                | LiteralKind::CStr { .. }
+                | LiteralKind::RawCStr { .. } => Class::String,
                 // Number literals.
                 LiteralKind::Float { .. } | LiteralKind::Int { .. } => Class::Number,
             },
@@ -901,7 +903,7 @@ fn exit_span(out: &mut impl Write, closing_tag: &str) {
 /// flexible.
 ///
 /// Note that if `context` is not `None` and that the given `klass` contains a `Span`, the function
-/// will then try to find this `span` in the `span_correspondance_map`. If found, it'll then
+/// will then try to find this `span` in the `span_correspondence_map`. If found, it'll then
 /// generate a link for this element (which corresponds to where its definition is located).
 fn string<T: Display>(
     out: &mut impl Write,
@@ -922,7 +924,7 @@ fn string<T: Display>(
 /// * If `klass` is `Some` but `klass.get_span()` is `None`, it writes the text wrapped in a
 ///   `<span>` with the provided `klass`.
 /// * If `klass` is `Some` and has a [`rustc_span::Span`], it then tries to generate a link (`<a>`
-///   element) by retrieving the link information from the `span_correspondance_map` that was filled
+///   element) by retrieving the link information from the `span_correspondence_map` that was filled
 ///   in `span_map.rs::collect_spans_and_sources`. If it cannot retrieve the information, then it's
 ///   the same as the second point (`klass` is `Some` but doesn't have a [`rustc_span::Span`]).
 fn string_without_closing_tag<T: Display>(
@@ -932,18 +934,16 @@ fn string_without_closing_tag<T: Display>(
     href_context: &Option<HrefContext<'_, '_>>,
     open_tag: bool,
 ) -> Option<&'static str> {
-    let Some(klass) = klass
-    else {
-        write!(out, "{}", text).unwrap();
+    let Some(klass) = klass else {
+        write!(out, "{text}").unwrap();
         return None;
     };
-    let Some(def_span) = klass.get_span()
-    else {
+    let Some(def_span) = klass.get_span() else {
         if !open_tag {
-            write!(out, "{}", text).unwrap();
+            write!(out, "{text}").unwrap();
             return None;
         }
-        write!(out, "<span class=\"{}\">{}", klass.as_html(), text).unwrap();
+        write!(out, "<span class=\"{klass}\">{text}", klass = klass.as_html()).unwrap();
         return Some("</span>");
     };
 
@@ -953,14 +953,17 @@ fn string_without_closing_tag<T: Display>(
             match t {
                 "self" | "Self" => write!(
                     &mut path,
-                    "<span class=\"{}\">{}</span>",
-                    Class::Self_(DUMMY_SP).as_html(),
-                    t
+                    "<span class=\"{klass}\">{t}</span>",
+                    klass = Class::Self_(DUMMY_SP).as_html(),
                 ),
                 "crate" | "super" => {
-                    write!(&mut path, "<span class=\"{}\">{}</span>", Class::KeyWord.as_html(), t)
+                    write!(
+                        &mut path,
+                        "<span class=\"{klass}\">{t}</span>",
+                        klass = Class::KeyWord.as_html(),
+                    )
                 }
-                t => write!(&mut path, "{}", t),
+                t => write!(&mut path, "{t}"),
             }
             .expect("Failed to build source HTML path");
             path
@@ -969,7 +972,7 @@ fn string_without_closing_tag<T: Display>(
 
     if let Some(href_context) = href_context {
         if let Some(href) =
-            href_context.context.shared.span_correspondance_map.get(&def_span).and_then(|href| {
+            href_context.context.shared.span_correspondence_map.get(&def_span).and_then(|href| {
                 let context = href_context.context;
                 // FIXME: later on, it'd be nice to provide two links (if possible) for all items:
                 // one to the documentation page and one to the source definition.
@@ -992,19 +995,24 @@ fn string_without_closing_tag<T: Display>(
                     )
                     .ok()
                     .map(|(url, _, _)| url),
+                    LinkFromSrc::Doc(def_id) => {
+                        format::href_with_root_path(*def_id, context, Some(&href_context.root_path))
+                            .ok()
+                            .map(|(doc_link, _, _)| doc_link)
+                    }
                 }
             })
         {
             if !open_tag {
                 // We're already inside an element which has the same klass, no need to give it
                 // again.
-                write!(out, "<a href=\"{}\">{}", href, text_s).unwrap();
+                write!(out, "<a href=\"{href}\">{text_s}").unwrap();
             } else {
                 let klass_s = klass.as_html();
                 if klass_s.is_empty() {
-                    write!(out, "<a href=\"{}\">{}", href, text_s).unwrap();
+                    write!(out, "<a href=\"{href}\">{text_s}").unwrap();
                 } else {
-                    write!(out, "<a class=\"{}\" href=\"{}\">{}", klass_s, href, text_s).unwrap();
+                    write!(out, "<a class=\"{klass_s}\" href=\"{href}\">{text_s}").unwrap();
                 }
             }
             return Some("</a>");
@@ -1019,7 +1027,7 @@ fn string_without_closing_tag<T: Display>(
         out.write_str(&text_s).unwrap();
         Some("")
     } else {
-        write!(out, "<span class=\"{}\">{}", klass_s, text_s).unwrap();
+        write!(out, "<span class=\"{klass_s}\">{text_s}").unwrap();
         Some("</span>")
     }
 }

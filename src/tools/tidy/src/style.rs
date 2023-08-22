@@ -227,7 +227,7 @@ fn is_unexplained_ignore(extension: &str, line: &str) -> bool {
 }
 
 pub fn check(path: &Path, bad: &mut bool) {
-    fn skip(path: &Path) -> bool {
+    fn skip(path: &Path, is_dir: bool) -> bool {
         if path.file_name().map_or(false, |name| name.to_string_lossy().starts_with(".#")) {
             // vim or emacs temporary file
             return true;
@@ -237,8 +237,15 @@ pub fn check(path: &Path, bad: &mut bool) {
             return true;
         }
 
+        // Don't check extensions for directories
+        if is_dir {
+            return false;
+        }
+
         let extensions = ["rs", "py", "js", "sh", "c", "cpp", "h", "md", "css", "ftl", "goml"];
-        if extensions.iter().all(|e| path.extension() != Some(OsStr::new(e))) {
+
+        // NB: don't skip paths without extensions (or else we'll skip all directories and will only check top level files)
+        if path.extension().map_or(true, |ext| !extensions.iter().any(|e| ext == OsStr::new(e))) {
             return true;
         }
 
@@ -289,9 +296,11 @@ pub fn check(path: &Path, bad: &mut bool) {
         if filename.contains("ignore-tidy") {
             return;
         }
-        // apfloat shouldn't be changed because of license problems
-        if is_in(file, "compiler", "rustc_apfloat") {
-            return;
+        // Shell completions are automatically generated
+        if let Some(p) = file.parent() {
+            if p.ends_with(Path::new("src/etc/completions")) {
+                return;
+            }
         }
         let mut skip_cr = contains_ignore_directive(can_contain, &contents, "cr");
         let mut skip_undocumented_unsafe =
@@ -378,10 +387,12 @@ pub fn check(path: &Path, bad: &mut bool) {
             }
             if filename != "style.rs" {
                 if trimmed.contains("TODO") {
-                    err("TODO is deprecated; use FIXME")
+                    err(
+                        "TODO is used for tasks that should be done before merging a PR; If you want to leave a message in the codebase use FIXME",
+                    )
                 }
                 if trimmed.contains("//") && trimmed.contains(" XXX") {
-                    err("XXX is deprecated; use FIXME")
+                    err("Instead of XXX use FIXME")
                 }
                 if any_problematic_line {
                     for s in problematic_consts_strings.iter() {

@@ -5,6 +5,7 @@ use rustc_ast::{Attribute, LitKind, MetaItem, MetaItemKind, MetaItemLit, NestedM
 use rustc_ast_pretty::pprust;
 use rustc_feature::{find_gated_cfg, is_builtin_attr_name, Features, GatedCfg};
 use rustc_macros::HashStable_Generic;
+use rustc_session::config::ExpectedValues;
 use rustc_session::lint::builtin::UNEXPECTED_CFGS;
 use rustc_session::lint::BuiltinLintDiagnostics;
 use rustc_session::parse::{feature_err, ParseSess};
@@ -22,13 +23,12 @@ use crate::session_diagnostics::{self, IncorrectReprFormatGenericCause};
 pub const VERSION_PLACEHOLDER: &str = "CURRENT_RUSTC_VERSION";
 
 pub fn rust_version_symbol() -> Symbol {
-    let version = option_env!("CFG_VERSION").unwrap_or("<current>");
-    let version = version.split(' ').next().unwrap();
+    let version = option_env!("CFG_RELEASE").unwrap_or("<current>");
     Symbol::intern(&version)
 }
 
 pub fn is_builtin_attr(attr: &Attribute) -> bool {
-    attr.is_doc_comment() || attr.ident().filter(|ident| is_builtin_attr_name(ident.name)).is_some()
+    attr.is_doc_comment() || attr.ident().is_some_and(|ident| is_builtin_attr_name(ident.name))
 }
 
 enum AttrError {
@@ -227,7 +227,7 @@ impl UnstableReason {
 }
 
 /// Collects stability info from `stable`/`unstable`/`rustc_allowed_through_unstable_modules`
-/// attributes in `attrs`.  Returns `None` if no stability attributes are found.
+/// attributes in `attrs`. Returns `None` if no stability attributes are found.
 pub fn find_stability(
     sess: &Session,
     attrs: &[Attribute],
@@ -281,7 +281,7 @@ pub fn find_stability(
 }
 
 /// Collects stability info from `rustc_const_stable`/`rustc_const_unstable`/`rustc_promotable`
-/// attributes in `attrs`.  Returns `None` if no stability attributes are found.
+/// attributes in `attrs`. Returns `None` if no stability attributes are found.
 pub fn find_const_stability(
     sess: &Session,
     attrs: &[Attribute],
@@ -581,32 +581,32 @@ pub fn cfg_matches(
 ) -> bool {
     eval_condition(cfg, sess, features, &mut |cfg| {
         try_gate_cfg(cfg.name, cfg.span, sess, features);
-        if let Some(names_valid) = &sess.check_config.names_valid {
-            if !names_valid.contains(&cfg.name) {
+        match sess.check_config.expecteds.get(&cfg.name) {
+            Some(ExpectedValues::Some(values)) if !values.contains(&cfg.value) => {
+                sess.buffer_lint_with_diagnostic(
+                    UNEXPECTED_CFGS,
+                    cfg.span,
+                    lint_node_id,
+                    "unexpected `cfg` condition value",
+                    BuiltinLintDiagnostics::UnexpectedCfgValue(
+                        (cfg.name, cfg.name_span),
+                        cfg.value.map(|v| (v, cfg.value_span.unwrap())),
+                    ),
+                );
+            }
+            None if sess.check_config.exhaustive_names => {
                 sess.buffer_lint_with_diagnostic(
                     UNEXPECTED_CFGS,
                     cfg.span,
                     lint_node_id,
                     "unexpected `cfg` condition name",
-                    BuiltinLintDiagnostics::UnexpectedCfg((cfg.name, cfg.name_span), None),
+                    BuiltinLintDiagnostics::UnexpectedCfgName(
+                        (cfg.name, cfg.name_span),
+                        cfg.value.map(|v| (v, cfg.value_span.unwrap())),
+                    ),
                 );
             }
-        }
-        if let Some(value) = cfg.value {
-            if let Some(values) = &sess.check_config.values_valid.get(&cfg.name) {
-                if !values.contains(&value) {
-                    sess.buffer_lint_with_diagnostic(
-                        UNEXPECTED_CFGS,
-                        cfg.span,
-                        lint_node_id,
-                        "unexpected `cfg` condition value",
-                        BuiltinLintDiagnostics::UnexpectedCfg(
-                            (cfg.name, cfg.name_span),
-                            cfg.value_span.map(|vs| (value, vs)),
-                        ),
-                    );
-                }
-            }
+            _ => { /* not unexpected */ }
         }
         sess.config.contains(&(cfg.name, cfg.value))
     })
@@ -623,7 +623,7 @@ fn gate_cfg(gated_cfg: &GatedCfg, cfg_span: Span, sess: &ParseSess, features: &F
     let (cfg, feature, has_feature) = gated_cfg;
     if !has_feature(features) && !cfg_span.allows_unstable(*feature) {
         let explain = format!("`cfg({cfg})` is experimental and subject to change");
-        feature_err(sess, *feature, cfg_span, &explain).emit();
+        feature_err(sess, *feature, cfg_span, explain).emit();
     }
 }
 
@@ -800,18 +800,15 @@ pub struct Deprecation {
 }
 
 /// Finds the deprecation attribute. `None` if none exists.
-pub fn find_deprecation(sess: &Session, attrs: &[Attribute]) -> Option<(Deprecation, Span)> {
-    find_deprecation_generic(sess, attrs.iter())
-}
-
-fn find_deprecation_generic<'a, I>(sess: &Session, attrs_iter: I) -> Option<(Deprecation, Span)>
-where
-    I: Iterator<Item = &'a Attribute>,
-{
+pub fn find_deprecation(
+    sess: &Session,
+    features: &Features,
+    attrs: &[Attribute],
+) -> Option<(Deprecation, Span)> {
     let mut depr: Option<(Deprecation, Span)> = None;
-    let is_rustc = sess.features_untracked().staged_api;
+    let is_rustc = features.staged_api;
 
-    'outer: for attr in attrs_iter {
+    'outer: for attr in attrs {
         if !attr.has_name(sym::deprecated) {
             continue;
         }
@@ -872,7 +869,7 @@ where
                                 }
                             }
                             sym::suggestion => {
-                                if !sess.features_untracked().deprecated_suggestion {
+                                if !features.deprecated_suggestion {
                                     sess.emit_err(session_diagnostics::DeprecatedItemSuggestion {
                                         span: mi.span,
                                         is_nightly: sess.is_nightly_build().then_some(()),
@@ -890,7 +887,7 @@ where
                                     meta.span(),
                                     AttrError::UnknownMetaItem(
                                         pprust::path_to_string(&mi.path),
-                                        if sess.features_untracked().deprecated_suggestion {
+                                        if features.deprecated_suggestion {
                                             &["since", "note", "suggestion"]
                                         } else {
                                             &["since", "note"]
@@ -1216,4 +1213,21 @@ pub fn parse_alignment(node: &ast::LitKind) -> Result<u32, &'static str> {
     } else {
         Err("not an unsuffixed integer")
     }
+}
+
+/// Read the content of a `rustc_confusables` attribute, and return the list of candidate names.
+pub fn parse_confusables(attr: &Attribute) -> Option<Vec<Symbol>> {
+    let meta = attr.meta()?;
+    let MetaItem { kind: MetaItemKind::List(ref metas), .. } = meta else { return None };
+
+    let mut candidates = Vec::new();
+
+    for meta in metas {
+        let NestedMetaItem::Lit(meta_lit) = meta else {
+            return None;
+        };
+        candidates.push(meta_lit.symbol);
+    }
+
+    return Some(candidates);
 }

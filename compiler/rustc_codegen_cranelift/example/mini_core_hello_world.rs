@@ -1,6 +1,6 @@
 #![feature(no_core, lang_items, never_type, linkage, extern_types, thread_local, repr_simd)]
 #![no_core]
-#![allow(dead_code, non_camel_case_types)]
+#![allow(dead_code, non_camel_case_types, internal_features)]
 
 extern crate mini_core;
 
@@ -319,10 +319,15 @@ fn main() {
 
     from_decimal_string();
 
-    #[cfg(not(any(jit, windows)))]
+    #[cfg(all(not(jit), not(all(windows, target_env = "gnu"))))]
     test_tls();
 
-    #[cfg(all(not(jit), target_arch = "x86_64", any(target_os = "linux", target_os = "darwin")))]
+    #[cfg(all(
+        not(jit),
+        not(no_unstable_features),
+        target_arch = "x86_64",
+        any(target_os = "linux", target_os = "macos")
+    ))]
     unsafe {
         global_asm_test();
     }
@@ -350,12 +355,17 @@ fn main() {
     let _a = f.0[0];
 }
 
-#[cfg(all(not(jit), target_arch = "x86_64", any(target_os = "linux", target_os = "darwin")))]
+#[cfg(all(
+    not(jit),
+    not(no_unstable_features),
+    target_arch = "x86_64",
+    any(target_os = "linux", target_os = "macos")
+))]
 extern "C" {
     fn global_asm_test();
 }
 
-#[cfg(all(not(jit), target_arch = "x86_64", target_os = "linux"))]
+#[cfg(all(not(jit), not(no_unstable_features), target_arch = "x86_64", target_os = "linux"))]
 global_asm! {
     "
     .global global_asm_test
@@ -365,7 +375,7 @@ global_asm! {
     "
 }
 
-#[cfg(all(not(jit), target_arch = "x86_64", target_os = "darwin"))]
+#[cfg(all(not(jit), not(no_unstable_features), target_arch = "x86_64", target_os = "macos"))]
 global_asm! {
     "
     .global _global_asm_test
@@ -524,6 +534,7 @@ pub enum E1 {
 // Computing the discriminant used to be done using the niche type (here `u8`,
 // from the `bool` field of `V1`), overflowing for variants with large enough
 // indices (`V3` and `V4`), causing them to be interpreted as other variants.
+#[rustfmt::skip]
 pub enum E2<X> {
     V1 { f: bool },
 

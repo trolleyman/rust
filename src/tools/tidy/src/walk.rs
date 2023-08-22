@@ -4,6 +4,8 @@ use std::{ffi::OsStr, fs::File, io::Read, path::Path};
 
 /// The default directory filter.
 pub fn filter_dirs(path: &Path) -> bool {
+    // FIXME: sync submodule exclusion list with rustfmt.toml
+    // bootstrap/etc
     let skip = [
         "tidy-test-file",
         "compiler/rustc_codegen_cranelift",
@@ -15,9 +17,7 @@ pub fn filter_dirs(path: &Path) -> bool {
         "src/tools/cargo",
         "src/tools/clippy",
         "src/tools/miri",
-        "src/tools/rls",
         "src/tools/rust-analyzer",
-        "src/tools/rust-installer",
         "src/tools/rustfmt",
         "src/doc/book",
         "src/doc/edition-guide",
@@ -41,7 +41,7 @@ pub fn filter_not_rust(path: &Path) -> bool {
 
 pub fn walk(
     path: &Path,
-    skip: impl Clone + Send + Sync + 'static + Fn(&Path) -> bool,
+    skip: impl Send + Sync + 'static + Fn(&Path, bool) -> bool,
     f: &mut dyn FnMut(&DirEntry, &str),
 ) {
     walk_many(&[path], skip, f);
@@ -49,7 +49,7 @@ pub fn walk(
 
 pub fn walk_many(
     paths: &[&Path],
-    skip: impl Clone + Send + Sync + 'static + Fn(&Path) -> bool,
+    skip: impl Send + Sync + 'static + Fn(&Path, bool) -> bool,
     f: &mut dyn FnMut(&DirEntry, &str),
 ) {
     let mut contents = Vec::new();
@@ -67,14 +67,16 @@ pub fn walk_many(
 
 pub(crate) fn walk_no_read(
     paths: &[&Path],
-    skip: impl Send + Sync + 'static + Fn(&Path) -> bool,
+    skip: impl Send + Sync + 'static + Fn(&Path, bool) -> bool,
     f: &mut dyn FnMut(&DirEntry),
 ) {
     let mut walker = ignore::WalkBuilder::new(paths[0]);
     for path in &paths[1..] {
         walker.add(path);
     }
-    let walker = walker.filter_entry(move |e| !skip(e.path()));
+    let walker = walker.filter_entry(move |e| {
+        !skip(e.path(), e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+    });
     for entry in walker.build() {
         if let Ok(entry) = entry {
             if entry.file_type().map_or(true, |kind| kind.is_dir() || kind.is_symlink()) {

@@ -14,7 +14,7 @@
 //! - [`Generics`], [`GenericParam`], [`WhereClause`]: Metadata associated with generic parameters.
 //! - [`EnumDef`] and [`Variant`]: Enum declaration.
 //! - [`MetaItemLit`] and [`LitKind`]: Literal expressions.
-//! - [`MacroDef`], [`MacStmtStyle`], [`MacCall`], [`MacDelimiter`]: Macro definition and invocation.
+//! - [`MacroDef`], [`MacStmtStyle`], [`MacCall`]: Macro definition and invocation.
 //! - [`Attribute`]: Metadata associated with item.
 //! - [`UnOp`], [`BinOp`], and [`BinOpKind`]: Unary and binary operators.
 
@@ -119,6 +119,12 @@ impl Path {
 
     pub fn is_global(&self) -> bool {
         !self.segments.is_empty() && self.segments[0].ident.name == kw::PathRoot
+    }
+
+    /// If this path is a single identifier with no arguments, does not ensure
+    /// that the path resolves to a const param, the caller should check this.
+    pub fn is_potential_trivial_const_arg(&self) -> bool {
+        self.segments.len() == 1 && self.segments[0].args.is_none()
     }
 }
 
@@ -231,15 +237,15 @@ impl AngleBracketedArg {
     }
 }
 
-impl Into<Option<P<GenericArgs>>> for AngleBracketedArgs {
-    fn into(self) -> Option<P<GenericArgs>> {
-        Some(P(GenericArgs::AngleBracketed(self)))
+impl Into<P<GenericArgs>> for AngleBracketedArgs {
+    fn into(self) -> P<GenericArgs> {
+        P(GenericArgs::AngleBracketed(self))
     }
 }
 
-impl Into<Option<P<GenericArgs>>> for ParenthesizedArgs {
-    fn into(self) -> Option<P<GenericArgs>> {
-        Some(P(GenericArgs::Parenthesized(self)))
+impl Into<P<GenericArgs>> for ParenthesizedArgs {
+    fn into(self) -> P<GenericArgs> {
+        P(GenericArgs::Parenthesized(self))
     }
 }
 
@@ -287,16 +293,34 @@ pub enum TraitBoundModifier {
     /// No modifiers
     None,
 
+    /// `!Trait`
+    Negative,
+
     /// `?Trait`
     Maybe,
 
     /// `~const Trait`
     MaybeConst,
 
+    /// `~const !Trait`
+    //
+    // This parses but will be rejected during AST validation.
+    MaybeConstNegative,
+
     /// `~const ?Trait`
     //
     // This parses but will be rejected during AST validation.
     MaybeConstMaybe,
+}
+
+impl TraitBoundModifier {
+    pub fn to_constness(self) -> Const {
+        match self {
+            // FIXME(effects) span
+            Self::MaybeConst => Const::Yes(DUMMY_SP),
+            _ => Const::No,
+        }
+    }
 }
 
 /// The AST represents all type param bounds as types.
@@ -1146,7 +1170,9 @@ impl Expr {
     ///
     /// If this is not the case, name resolution does not resolve `N` when using
     /// `min_const_generics` as more complex expressions are not supported.
-    pub fn is_potential_trivial_const_param(&self) -> bool {
+    ///
+    /// Does not ensure that the path resolves to a const param, the caller should check this.
+    pub fn is_potential_trivial_const_arg(&self) -> bool {
         let this = if let ExprKind::Block(block, None) = &self.kind
             && block.stmts.len() == 1
             && let StmtKind::Expr(expr) = &block.stmts[0].kind
@@ -1157,8 +1183,7 @@ impl Expr {
         };
 
         if let ExprKind::Path(None, path) = &this.kind
-            && path.segments.len() == 1
-            && path.segments[0].args.is_none()
+            && path.is_potential_trivial_const_arg()
         {
             true
         } else {
@@ -1273,6 +1298,7 @@ impl Expr {
             ExprKind::Continue(..) => ExprPrecedence::Continue,
             ExprKind::Ret(..) => ExprPrecedence::Ret,
             ExprKind::InlineAsm(..) => ExprPrecedence::InlineAsm,
+            ExprKind::OffsetOf(..) => ExprPrecedence::OffsetOf,
             ExprKind::MacCall(..) => ExprPrecedence::Mac,
             ExprKind::Struct(..) => ExprPrecedence::Struct,
             ExprKind::Repeat(..) => ExprPrecedence::Repeat,
@@ -1281,6 +1307,7 @@ impl Expr {
             ExprKind::Yield(..) => ExprPrecedence::Yield,
             ExprKind::Yeet(..) => ExprPrecedence::Yeet,
             ExprKind::FormatArgs(..) => ExprPrecedence::FormatArgs,
+            ExprKind::Become(..) => ExprPrecedence::Become,
             ExprKind::Err => ExprPrecedence::Err,
         }
     }
@@ -1300,17 +1327,17 @@ impl Expr {
 
     /// To a first-order approximation, is this a pattern?
     pub fn is_approximately_pattern(&self) -> bool {
-        match &self.peel_parens().kind {
+        matches!(
+            &self.peel_parens().kind,
             ExprKind::Array(_)
-            | ExprKind::Call(_, _)
-            | ExprKind::Tup(_)
-            | ExprKind::Lit(_)
-            | ExprKind::Range(_, _, _)
-            | ExprKind::Underscore
-            | ExprKind::Path(_, _)
-            | ExprKind::Struct(_) => true,
-            _ => false,
-        }
+                | ExprKind::Call(_, _)
+                | ExprKind::Tup(_)
+                | ExprKind::Lit(_)
+                | ExprKind::Range(_, _, _)
+                | ExprKind::Underscore
+                | ExprKind::Path(_, _)
+                | ExprKind::Struct(_)
+        )
     }
 }
 
@@ -1430,15 +1457,11 @@ pub enum ExprKind {
     Block(P<Block>, Option<Label>),
     /// An async block (`async move { ... }`).
     ///
-    /// The `NodeId` is the `NodeId` for the closure that results from
-    /// desugaring an async block, just like the NodeId field in the
-    /// `Async::Yes` variant. This is necessary in order to create a def for the
-    /// closure which can be used as a parent of any child defs. Defs
-    /// created during lowering cannot be made the parent of any other
-    /// preexisting defs.
-    Async(CaptureBy, NodeId, P<Block>),
-    /// An await expression (`my_future.await`).
-    Await(P<Expr>),
+    /// The async block used to have a `NodeId`, which was removed in favor of
+    /// using the parent `NodeId` of the parent `Expr`.
+    Async(CaptureBy, P<Block>),
+    /// An await expression (`my_future.await`). Span is of await keyword.
+    Await(P<Expr>, Span),
 
     /// A try block (`try { ... }`).
     TryBlock(P<Block>),
@@ -1453,7 +1476,8 @@ pub enum ExprKind {
     /// Access of a named (e.g., `obj.foo`) or unnamed (e.g., `obj.0`) struct field.
     Field(P<Expr>, Ident),
     /// An indexing operation (e.g., `foo[2]`).
-    Index(P<Expr>, P<Expr>),
+    /// The span represents the span of the `[2]`, including brackets.
+    Index(P<Expr>, P<Expr>, Span),
     /// A range (e.g., `1..2`, `1..`, `..2`, `1..=2`, `..=2`; and `..` in destructuring assignment).
     Range(Option<P<Expr>>, Option<P<Expr>>, RangeLimits),
     /// An underscore, used in destructuring assignment to ignore a value.
@@ -1476,6 +1500,9 @@ pub enum ExprKind {
 
     /// Output of the `asm!()` macro.
     InlineAsm(P<InlineAsm>),
+
+    /// Output of the `offset_of!()` macro.
+    OffsetOf(P<Ty>, P<[Ident]>),
 
     /// A macro invocation; pre-expansion.
     MacCall(P<MacCall>),
@@ -1503,6 +1530,11 @@ pub enum ExprKind {
     /// A `do yeet` (aka `throw`/`fail`/`bail`/`raise`/whatever),
     /// with an optional value to be returned.
     Yeet(Option<P<Expr>>),
+
+    /// A tail call return, with the value to be returned.
+    ///
+    /// While `.0` must be a function call, we check this later, after parsing.
+    Become(P<Expr>),
 
     /// Bytes included via `include_bytes!`
     /// Added for optimization purposes to avoid the need to escape
@@ -1593,7 +1625,6 @@ pub enum ClosureBinder {
 pub struct MacCall {
     pub path: Path,
     pub args: P<DelimArgs>,
-    pub prior_type_ascription: Option<(Span, bool)>,
 }
 
 impl MacCall {
@@ -1677,7 +1708,7 @@ where
 #[derive(Clone, Encodable, Decodable, Debug)]
 pub struct DelimArgs {
     pub dspan: DelimSpan,
-    pub delim: MacDelimiter,
+    pub delim: Delimiter, // Note: `Delimiter::Invisible` never occurs
     pub tokens: TokenStream,
 }
 
@@ -1685,7 +1716,7 @@ impl DelimArgs {
     /// Whether a macro with these arguments needs a semicolon
     /// when used as a standalone item or statement.
     pub fn need_semicolon(&self) -> bool {
-        !matches!(self, DelimArgs { delim: MacDelimiter::Brace, .. })
+        !matches!(self, DelimArgs { delim: Delimiter::Brace, .. })
     }
 }
 
@@ -1698,32 +1729,6 @@ where
         dspan.hash_stable(ctx, hasher);
         delim.hash_stable(ctx, hasher);
         tokens.hash_stable(ctx, hasher);
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Encodable, Decodable, Debug, HashStable_Generic)]
-pub enum MacDelimiter {
-    Parenthesis,
-    Bracket,
-    Brace,
-}
-
-impl MacDelimiter {
-    pub fn to_token(self) -> Delimiter {
-        match self {
-            MacDelimiter::Parenthesis => Delimiter::Parenthesis,
-            MacDelimiter::Bracket => Delimiter::Bracket,
-            MacDelimiter::Brace => Delimiter::Brace,
-        }
-    }
-
-    pub fn from_token(delim: Delimiter) -> Option<MacDelimiter> {
-        match delim {
-            Delimiter::Parenthesis => Some(MacDelimiter::Parenthesis),
-            Delimiter::Bracket => Some(MacDelimiter::Bracket),
-            Delimiter::Brace => Some(MacDelimiter::Brace),
-            Delimiter::Invisible => None,
-        }
     }
 }
 
@@ -1818,6 +1823,8 @@ pub enum LitKind {
     /// A byte string (`b"foo"`). Not stored as a symbol because it might be
     /// non-utf8, and symbols only allow utf8 strings.
     ByteStr(Lrc<[u8]>, StrStyle),
+    /// A C String (`c"foo"`). Guaranteed to only have `\0` at the end.
+    CStr(Lrc<[u8]>, StrStyle),
     /// A byte char (`b'f'`).
     Byte(u8),
     /// A character literal (`'a'`).
@@ -1872,6 +1879,7 @@ impl LitKind {
             // unsuffixed variants
             LitKind::Str(..)
             | LitKind::ByteStr(..)
+            | LitKind::CStr(..)
             | LitKind::Byte(..)
             | LitKind::Char(..)
             | LitKind::Int(_, LitIntType::Unsuffixed)
@@ -2341,7 +2349,12 @@ impl Param {
     /// Builds a `Param` object from `ExplicitSelf`.
     pub fn from_self(attrs: AttrVec, eself: ExplicitSelf, eself_ident: Ident) -> Param {
         let span = eself.span.to(eself_ident.span);
-        let infer_ty = P(Ty { id: DUMMY_NODE_ID, kind: TyKind::ImplicitSelf, span, tokens: None });
+        let infer_ty = P(Ty {
+            id: DUMMY_NODE_ID,
+            kind: TyKind::ImplicitSelf,
+            span: eself_ident.span,
+            tokens: None,
+        });
         let (mutbl, ty) = match eself.node {
             SelfKind::Explicit(ty, mutbl) => (mutbl, ty),
             SelfKind::Value(mutbl) => (mutbl, infer_ty),
@@ -2385,10 +2398,10 @@ pub struct FnDecl {
 
 impl FnDecl {
     pub fn has_self(&self) -> bool {
-        self.inputs.get(0).map_or(false, Param::is_self)
+        self.inputs.get(0).is_some_and(Param::is_self)
     }
     pub fn c_variadic(&self) -> bool {
-        self.inputs.last().map_or(false, |arg| matches!(arg.ty.kind, TyKind::CVarArgs))
+        self.inputs.last().is_some_and(|arg| matches!(arg.ty.kind, TyKind::CVarArgs))
     }
 }
 
@@ -2456,6 +2469,16 @@ impl fmt::Debug for ImplPolarity {
             ImplPolarity::Negative(_) => "negative".fmt(f),
         }
     }
+}
+
+#[derive(Copy, Clone, PartialEq, Encodable, Decodable, HashStable_Generic)]
+pub enum BoundPolarity {
+    /// `Type: Trait`
+    Positive,
+    /// `Type: !Trait`
+    Negative(Span),
+    /// `Type: ?Trait`
+    Maybe(Span),
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
@@ -2585,7 +2608,7 @@ pub enum AttrStyle {
 
 rustc_index::newtype_index! {
     #[custom_encodable]
-    #[debug_format = "AttrId({})]"]
+    #[debug_format = "AttrId({})"]
     pub struct AttrId {}
 }
 
@@ -2628,6 +2651,15 @@ pub enum AttrKind {
 pub struct NormalAttr {
     pub item: AttrItem,
     pub tokens: Option<LazyAttrTokenStream>,
+}
+
+impl NormalAttr {
+    pub fn from_ident(ident: Ident) -> Self {
+        Self {
+            item: AttrItem { path: Path::from_ident(ident), args: AttrArgs::Empty, tokens: None },
+            tokens: None,
+        }
+    }
 }
 
 #[derive(Clone, Encodable, Decodable, Debug, HashStable_Generic)]
@@ -2902,6 +2934,21 @@ pub struct Fn {
 }
 
 #[derive(Clone, Encodable, Decodable, Debug)]
+pub struct StaticItem {
+    pub ty: P<Ty>,
+    pub mutability: Mutability,
+    pub expr: Option<P<Expr>>,
+}
+
+#[derive(Clone, Encodable, Decodable, Debug)]
+pub struct ConstItem {
+    pub defaultness: Defaultness,
+    pub generics: Generics,
+    pub ty: P<Ty>,
+    pub expr: Option<P<Expr>>,
+}
+
+#[derive(Clone, Encodable, Decodable, Debug)]
 pub enum ItemKind {
     /// An `extern crate` item, with the optional *original* crate name if the crate was renamed.
     ///
@@ -2914,11 +2961,11 @@ pub enum ItemKind {
     /// A static item (`static`).
     ///
     /// E.g., `static FOO: i32 = 42;` or `static FOO: &'static str = "bar";`.
-    Static(P<Ty>, Mutability, Option<P<Expr>>),
+    Static(Box<StaticItem>),
     /// A constant item (`const`).
     ///
     /// E.g., `const FOO: i32 = 42;`.
-    Const(Defaultness, P<Ty>, Option<P<Expr>>),
+    Const(Box<ConstItem>),
     /// A function declaration (`fn`).
     ///
     /// E.g., `fn foo(bar: usize) -> usize { .. }`.
@@ -2973,7 +3020,7 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
-    pub fn article(&self) -> &str {
+    pub fn article(&self) -> &'static str {
         use ItemKind::*;
         match self {
             Use(..) | Static(..) | Const(..) | Fn(..) | Mod(..) | GlobalAsm(..) | TyAlias(..)
@@ -2982,7 +3029,7 @@ impl ItemKind {
         }
     }
 
-    pub fn descr(&self) -> &str {
+    pub fn descr(&self) -> &'static str {
         match self {
             ItemKind::ExternCrate(..) => "extern crate",
             ItemKind::Use(..) => "`use` import",
@@ -3008,6 +3055,7 @@ impl ItemKind {
         match self {
             Self::Fn(box Fn { generics, .. })
             | Self::TyAlias(box TyAlias { generics, .. })
+            | Self::Const(box ConstItem { generics, .. })
             | Self::Enum(_, generics)
             | Self::Struct(_, generics)
             | Self::Union(_, generics)
@@ -3034,7 +3082,7 @@ pub type AssocItem = Item<AssocItemKind>;
 pub enum AssocItemKind {
     /// An associated constant, `const $ident: $ty $def?;` where `def ::= "=" $expr? ;`.
     /// If `def` is parsed, then the constant is provided, and otherwise required.
-    Const(Defaultness, P<Ty>, Option<P<Expr>>),
+    Const(Box<ConstItem>),
     /// An associated function.
     Fn(Box<Fn>),
     /// An associated type.
@@ -3046,7 +3094,7 @@ pub enum AssocItemKind {
 impl AssocItemKind {
     pub fn defaultness(&self) -> Defaultness {
         match *self {
-            Self::Const(defaultness, ..)
+            Self::Const(box ConstItem { defaultness, .. })
             | Self::Fn(box Fn { defaultness, .. })
             | Self::Type(box TyAlias { defaultness, .. }) => defaultness,
             Self::MacCall(..) => Defaultness::Final,
@@ -3057,7 +3105,7 @@ impl AssocItemKind {
 impl From<AssocItemKind> for ItemKind {
     fn from(assoc_item_kind: AssocItemKind) -> ItemKind {
         match assoc_item_kind {
-            AssocItemKind::Const(a, b, c) => ItemKind::Const(a, b, c),
+            AssocItemKind::Const(item) => ItemKind::Const(item),
             AssocItemKind::Fn(fn_kind) => ItemKind::Fn(fn_kind),
             AssocItemKind::Type(ty_alias_kind) => ItemKind::TyAlias(ty_alias_kind),
             AssocItemKind::MacCall(a) => ItemKind::MacCall(a),
@@ -3070,7 +3118,7 @@ impl TryFrom<ItemKind> for AssocItemKind {
 
     fn try_from(item_kind: ItemKind) -> Result<AssocItemKind, ItemKind> {
         Ok(match item_kind {
-            ItemKind::Const(a, b, c) => AssocItemKind::Const(a, b, c),
+            ItemKind::Const(item) => AssocItemKind::Const(item),
             ItemKind::Fn(fn_kind) => AssocItemKind::Fn(fn_kind),
             ItemKind::TyAlias(ty_kind) => AssocItemKind::Type(ty_kind),
             ItemKind::MacCall(a) => AssocItemKind::MacCall(a),
@@ -3095,7 +3143,9 @@ pub enum ForeignItemKind {
 impl From<ForeignItemKind> for ItemKind {
     fn from(foreign_item_kind: ForeignItemKind) -> ItemKind {
         match foreign_item_kind {
-            ForeignItemKind::Static(a, b, c) => ItemKind::Static(a, b, c),
+            ForeignItemKind::Static(a, b, c) => {
+                ItemKind::Static(StaticItem { ty: a, mutability: b, expr: c }.into())
+            }
             ForeignItemKind::Fn(fn_kind) => ItemKind::Fn(fn_kind),
             ForeignItemKind::TyAlias(ty_alias_kind) => ItemKind::TyAlias(ty_alias_kind),
             ForeignItemKind::MacCall(a) => ItemKind::MacCall(a),
@@ -3108,7 +3158,9 @@ impl TryFrom<ItemKind> for ForeignItemKind {
 
     fn try_from(item_kind: ItemKind) -> Result<ForeignItemKind, ItemKind> {
         Ok(match item_kind {
-            ItemKind::Static(a, b, c) => ForeignItemKind::Static(a, b, c),
+            ItemKind::Static(box StaticItem { ty: a, mutability: b, expr: c }) => {
+                ForeignItemKind::Static(a, b, c)
+            }
             ItemKind::Fn(fn_kind) => ForeignItemKind::Fn(fn_kind),
             ItemKind::TyAlias(ty_alias_kind) => ForeignItemKind::TyAlias(ty_alias_kind),
             ItemKind::MacCall(a) => ForeignItemKind::MacCall(a),
@@ -3125,8 +3177,8 @@ mod size_asserts {
     use super::*;
     use rustc_data_structures::static_assert_size;
     // tidy-alphabetical-start
-    static_assert_size!(AssocItem, 104);
-    static_assert_size!(AssocItemKind, 32);
+    static_assert_size!(AssocItem, 88);
+    static_assert_size!(AssocItemKind, 16);
     static_assert_size!(Attribute, 32);
     static_assert_size!(Block, 32);
     static_assert_size!(Expr, 72);

@@ -24,7 +24,7 @@ pub(crate) use llvm::codegen_llvm_intrinsic_call;
 use rustc_middle::ty;
 use rustc_middle::ty::layout::{HasParamEnv, ValidityRequirement};
 use rustc_middle::ty::print::{with_no_trimmed_paths, with_no_visible_paths};
-use rustc_middle::ty::subst::SubstsRef;
+use rustc_middle::ty::GenericArgsRef;
 use rustc_span::symbol::{kw, sym, Symbol};
 
 use crate::prelude::*;
@@ -42,7 +42,7 @@ fn report_atomic_type_validation_error<'tcx>(
 ) {
     fx.tcx.sess.span_err(
         span,
-        &format!(
+        format!(
             "`{}` intrinsic: expected basic integer or raw pointer type, found `{:?}`",
             intrinsic, ty
         ),
@@ -51,17 +51,13 @@ fn report_atomic_type_validation_error<'tcx>(
     fx.bcx.ins().trap(TrapCode::UnreachableCodeReached);
 }
 
-pub(crate) fn clif_vector_type<'tcx>(tcx: TyCtxt<'tcx>, layout: TyAndLayout<'tcx>) -> Option<Type> {
+pub(crate) fn clif_vector_type<'tcx>(tcx: TyCtxt<'tcx>, layout: TyAndLayout<'tcx>) -> Type {
     let (element, count) = match layout.abi {
         Abi::Vector { element, count } => (element, count),
         _ => unreachable!(),
     };
 
-    match scalar_to_clif_type(tcx, element).by(u32::try_from(count).unwrap()) {
-        // Cranelift currently only implements icmp for 128bit vectors.
-        Some(vector_ty) if vector_ty.bits() == 128 => Some(vector_ty),
-        _ => None,
-    }
+    scalar_to_clif_type(tcx, element).by(u32::try_from(count).unwrap()).unwrap()
 }
 
 fn simd_for_each_lane<'tcx>(
@@ -217,13 +213,13 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
     source_info: mir::SourceInfo,
 ) {
     let intrinsic = fx.tcx.item_name(instance.def_id());
-    let substs = instance.substs;
+    let instance_args = instance.args;
 
     if intrinsic.as_str().starts_with("simd_") {
         self::simd::codegen_simd_intrinsic_call(
             fx,
             intrinsic,
-            substs,
+            instance_args,
             args,
             destination,
             target.expect("target for simd intrinsic"),
@@ -237,7 +233,7 @@ pub(crate) fn codegen_intrinsic_call<'tcx>(
             fx,
             instance,
             intrinsic,
-            substs,
+            instance_args,
             args,
             destination,
             target,
@@ -369,7 +365,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
     fx: &mut FunctionCx<'_, '_, 'tcx>,
     instance: Instance<'tcx>,
     intrinsic: Symbol,
-    substs: SubstsRef<'tcx>,
+    generic_args: GenericArgsRef<'tcx>,
     args: &[mir::Operand<'tcx>],
     ret: CPlace<'tcx>,
     destination: Option<BasicBlock>,
@@ -398,7 +394,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             let dst = dst.load_scalar(fx);
             let count = count.load_scalar(fx);
 
-            let elem_ty = substs.type_at(0);
+            let elem_ty = generic_args.type_at(0);
             let elem_size: u64 = fx.layout_of(elem_ty).size.bytes();
             assert_eq!(args.len(), 3);
             let byte_amount =
@@ -414,7 +410,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             let src = src.load_scalar(fx);
             let count = count.load_scalar(fx);
 
-            let elem_ty = substs.type_at(0);
+            let elem_ty = generic_args.type_at(0);
             let elem_size: u64 = fx.layout_of(elem_ty).size.bytes();
             assert_eq!(args.len(), 3);
             let byte_amount =
@@ -432,7 +428,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
         sym::size_of_val => {
             intrinsic_args!(fx, args => (ptr); intrinsic);
 
-            let layout = fx.layout_of(substs.type_at(0));
+            let layout = fx.layout_of(generic_args.type_at(0));
             // Note: Can't use is_unsized here as truly unsized types need to take the fixed size
             // branch
             let size = if let Abi::ScalarPair(_, _) = ptr.layout().abi {
@@ -447,7 +443,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
         sym::min_align_of_val => {
             intrinsic_args!(fx, args => (ptr); intrinsic);
 
-            let layout = fx.layout_of(substs.type_at(0));
+            let layout = fx.layout_of(generic_args.type_at(0));
             // Note: Can't use is_unsized here as truly unsized types need to take the fixed size
             // branch
             let align = if let Abi::ScalarPair(_, _) = ptr.layout().abi {
@@ -476,28 +472,11 @@ fn codegen_regular_intrinsic_call<'tcx>(
             ret.write_cvalue(fx, CValue::by_val(align, usize_layout));
         }
 
-        sym::unchecked_add
-        | sym::unchecked_sub
-        | sym::unchecked_mul
-        | sym::unchecked_div
-        | sym::exact_div
-        | sym::unchecked_rem
-        | sym::unchecked_shl
-        | sym::unchecked_shr => {
+        sym::exact_div => {
             intrinsic_args!(fx, args => (x, y); intrinsic);
 
-            // FIXME trap on overflow
-            let bin_op = match intrinsic {
-                sym::unchecked_add => BinOp::Add,
-                sym::unchecked_sub => BinOp::Sub,
-                sym::unchecked_mul => BinOp::Mul,
-                sym::unchecked_div | sym::exact_div => BinOp::Div,
-                sym::unchecked_rem => BinOp::Rem,
-                sym::unchecked_shl => BinOp::Shl,
-                sym::unchecked_shr => BinOp::Shr,
-                _ => unreachable!(),
-            };
-            let res = crate::num::codegen_int_binop(fx, bin_op, x, y);
+            // FIXME trap on inexact
+            let res = crate::num::codegen_int_binop(fx, BinOp::Div, x, y);
             ret.write_cvalue(fx, res);
         }
         sym::saturating_add | sym::saturating_sub => {
@@ -534,7 +513,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
 
         // The only difference between offset and arith_offset is regarding UB. Because Cranelift
         // doesn't have UB both are codegen'ed the same way
-        sym::offset | sym::arith_offset => {
+        sym::arith_offset => {
             intrinsic_args!(fx, args => (base, offset); intrinsic);
             let offset = offset.load_scalar(fx);
 
@@ -623,7 +602,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
         sym::assert_inhabited | sym::assert_zero_valid | sym::assert_mem_uninitialized_valid => {
             intrinsic_args!(fx, args => (); intrinsic);
 
-            let ty = substs.type_at(0);
+            let ty = generic_args.type_at(0);
 
             let requirement = ValidityRequirement::from_intrinsic(intrinsic);
 
@@ -668,12 +647,13 @@ fn codegen_regular_intrinsic_call<'tcx>(
             let val = CValue::by_ref(Pointer::new(ptr.load_scalar(fx)), inner_layout);
             ret.write_cvalue(fx, val);
         }
-        sym::volatile_store | sym::unaligned_volatile_store => {
+        sym::volatile_store | sym::unaligned_volatile_store | sym::nontemporal_store => {
             intrinsic_args!(fx, args => (ptr, val); intrinsic);
             let ptr = ptr.load_scalar(fx);
 
             // Cranelift treats stores as volatile by default
             // FIXME correctly handle unaligned_volatile_store
+            // FIXME actually do nontemporal stores if requested
             let dest = CPlace::for_ptr(Pointer::new(ptr), val.layout());
             dest.write_cvalue(fx, val);
         }
@@ -695,7 +675,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             intrinsic_args!(fx, args => (ptr, base); intrinsic);
             let ptr = ptr.load_scalar(fx);
             let base = base.load_scalar(fx);
-            let ty = substs.type_at(0);
+            let ty = generic_args.type_at(0);
 
             let pointee_size: u64 = fx.layout_of(ty).size.bytes();
             let diff_bytes = fx.bcx.ins().isub(ptr, base);
@@ -741,7 +721,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             intrinsic_args!(fx, args => (ptr); intrinsic);
             let ptr = ptr.load_scalar(fx);
 
-            let ty = substs.type_at(0);
+            let ty = generic_args.type_at(0);
             match ty.kind() {
                 ty::Uint(UintTy::U128) | ty::Int(IntTy::I128) => {
                     // FIXME implement 128bit atomics
@@ -772,7 +752,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             intrinsic_args!(fx, args => (ptr, val); intrinsic);
             let ptr = ptr.load_scalar(fx);
 
-            let ty = substs.type_at(0);
+            let ty = generic_args.type_at(0);
             match ty.kind() {
                 ty::Uint(UintTy::U128) | ty::Int(IntTy::I128) => {
                     // FIXME implement 128bit atomics
@@ -1107,8 +1087,8 @@ fn codegen_regular_intrinsic_call<'tcx>(
 
             fx.bcx.ins().call_indirect(f_sig, f, &[data]);
 
-            let layout = ret.layout();
-            let ret_val = CValue::const_val(fx, layout, ty::ScalarInt::null(layout.size));
+            let layout = fx.layout_of(fx.tcx.types.i32);
+            let ret_val = CValue::by_val(fx.bcx.ins().iconst(types::I32, 0), layout);
             ret.write_cvalue(fx, ret_val);
         }
 
@@ -1149,7 +1129,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
             let lhs_ref = lhs_ref.load_scalar(fx);
             let rhs_ref = rhs_ref.load_scalar(fx);
 
-            let size = fx.layout_of(substs.type_at(0)).layout.size();
+            let size = fx.layout_of(generic_args.type_at(0)).layout.size();
             // FIXME add and use emit_small_memcmp
             let is_eq_value = if size == Size::ZERO {
                 // No bytes means they're trivially equal
@@ -1173,6 +1153,20 @@ fn codegen_regular_intrinsic_call<'tcx>(
                 fx.bcx.ins().icmp_imm(IntCC::Equal, cmp, 0)
             };
             ret.write_cvalue(fx, CValue::by_val(is_eq_value, ret.layout()));
+        }
+
+        sym::compare_bytes => {
+            intrinsic_args!(fx, args => (lhs_ptr, rhs_ptr, bytes_val); intrinsic);
+            let lhs_ptr = lhs_ptr.load_scalar(fx);
+            let rhs_ptr = rhs_ptr.load_scalar(fx);
+            let bytes_val = bytes_val.load_scalar(fx);
+
+            let params = vec![AbiParam::new(fx.pointer_type); 3];
+            let returns = vec![AbiParam::new(types::I32)];
+            let args = &[lhs_ptr, rhs_ptr, bytes_val];
+            // Here we assume that the `memcmp` provided by the target is a NOP for size 0.
+            let cmp = fx.lib_call("memcmp", params, returns, args)[0];
+            ret.write_cvalue(fx, CValue::by_val(cmp, ret.layout()));
         }
 
         sym::const_allocate => {
@@ -1206,7 +1200,7 @@ fn codegen_regular_intrinsic_call<'tcx>(
         _ => {
             fx.tcx
                 .sess
-                .span_fatal(source_info.span, &format!("unsupported intrinsic {}", intrinsic));
+                .span_fatal(source_info.span, format!("unsupported intrinsic {}", intrinsic));
         }
     }
 
