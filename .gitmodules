@@ -47,3 +47,6 @@
 	path = src/gcc
 	url = https://github.com/rust-lang/gcc.git
 	shallow = true
+[submodule "src/librustdoc/giallo"]
+	path = src/librustdoc/giallo
+	url = git@github.com:trolleyman/giallo.git

@@ -16,6 +16,7 @@ use rustc_lexer::{Cursor, FrontmatterAllowed, LiteralKind, TokenKind};
 use rustc_span::BytePos;
 use rustc_span::edition::Edition;
 use rustc_span::symbol::Symbol;
+use giallo::TokenizeOptions;
 
 use super::format;
 use crate::clean::PrimitiveType;
@@ -53,6 +54,19 @@ pub(crate) enum Tooltip {
 }
 
 /// Highlights `src` as an inline example, returning the HTML output.
+pub(crate) fn render_non_rust_example_with_highlighting(
+    src: &str,
+    lang: Option<&str>,
+    extra_classes: &[String],
+) -> impl Display {
+    fmt::from_fn(move |f| {
+        write_header("", lang, None, extra_classes).fmt(f)?;
+        write_non_rust_code(src, lang).fmt(f)?;
+        write_footer(None).fmt(f)
+    })
+}
+
+/// Highlights `src` as an inline example, returning the HTML output.
 pub(crate) fn render_example_with_highlighting(
     src: &str,
     tooltip: Option<&Tooltip>,
@@ -60,13 +74,33 @@ pub(crate) fn render_example_with_highlighting(
     extra_classes: &[String],
 ) -> impl Display {
     fmt::from_fn(move |f| {
-        write_header("rust-example-rendered", tooltip, extra_classes).fmt(f)?;
+        write_header("rust-example-rendered", Some("rust"), tooltip, extra_classes).fmt(f)?;
         write_code(f, src, None, None, None);
         write_footer(playground_button).fmt(f)
     })
 }
 
-fn write_header(class: &str, tooltip: Option<&Tooltip>, extra_classes: &[String]) -> impl Display {
+pub(crate) fn write_non_rust_code(
+    src: &str,
+    lang: Option<&str>,
+) -> impl Display {
+    let registry = giallo::Registry::default(); // TODO: Cache
+    let highlighted_code = match registry.tokenize(src, TokenizeOptions::new(lang.unwrap_or(giallo::PLAIN_GRAMMAR_NAME)).fallback_to_plain(true)) {
+        Ok(code) => code,
+        Err(_) => {
+            // If highlighting fails, just escape and write the original source.
+            return fmt::from_fn(|f| {
+                write!(f, "{}", EscapeBodyText(src))
+            });
+        }
+    };
+    
+    fmt::from_fn(move |f: &mut fmt::Formatter<'_>| {
+        write!(f, "TODO")
+    })
+}
+
+fn write_header(class: &str, lang: Option<&str>, tooltip: Option<&Tooltip>, extra_classes: &[String]) -> impl Display {
     fmt::from_fn(move |f| {
         write!(
             f,
@@ -108,9 +142,10 @@ fn write_header(class: &str, tooltip: Option<&Tooltip>, extra_classes: &[String]
         }
 
         let classes = fmt::from_fn(|f| {
-            iter::once("rust")
-                .chain(Some(class).filter(|class| !class.is_empty()))
-                .chain(extra_classes.iter().map(String::as_str))
+            let lang_class: Option<Cow<'_, str>> = lang.map(|lang| if lang == "rust" { "rust".into() } else { format!("language-{}", lang).into() });
+            lang_class.into_iter()
+                .chain(iter::once(class).filter(|s| !s.is_empty()).map(Cow::from))
+                .chain(extra_classes.iter().map(Cow::from))
                 .joined(" ", f)
         });
 

@@ -383,6 +383,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "175812e0be2bccb6abe50bb8d566126198344f707e304f45c648fd8f2cc0365e"
 
 [[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+
+[[package]]
 name = "camino"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1582,6 +1588,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "giallo"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "onig-regset",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gimli"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2713,6 +2730,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "onig-regset"
+version = "6.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6677cde75158351827ddee167c3dfd914c724cb7689e7f655334f9fae0dabec6"
+dependencies = [
+ "bitflags",
+ "libc",
+ "once_cell",
+ "onig_sys",
+]
+
+[[package]]
+name = "onig_sys"
+version = "69.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7f86c6eef3d6df15f23bcfb6af487cbd2fed4e5581d58d5bf1f5f8b7f6727dc"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
 name = "opener"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2819,6 +2858,12 @@ dependencies = [
  "smallvec",
  "windows-link 0.2.1",
 ]
+
+[[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pathdiff"
@@ -3309,6 +3354,28 @@ version = "0.1.0"
 dependencies = [
  "tidy",
  "walkdir",
+]
+
+[[package]]
+name = "rmp"
+version = "0.8.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "228ed7c16fa39782c3b3468e974aec2795e9089153cd08ee2e9aefb3613334c4"
+dependencies = [
+ "byteorder",
+ "num-traits",
+ "paste",
+]
+
+[[package]]
+name = "rmp-serde"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "52e599a477cf9840e92f2cde9a7189e67b42c57532749bf90aea6ec10facd4db"
+dependencies = [
+ "byteorder",
+ "rmp",
+ "serde",
 ]
 
 [[package]]
@@ -4866,6 +4933,7 @@ dependencies = [
  "askama",
  "base64",
  "expect-test",
+ "giallo",
  "indexmap",
  "itertools",
  "minifier",
