@@ -12,6 +12,7 @@ path = "lib.rs"
 arrayvec = { version = "0.7", default-features = false }
 askama = { version = "0.14", default-features = false, features = ["alloc", "config", "derive"] }
 base64 = "0.21.7"
+giallo = { path = "./giallo", features = ["dump"] } # ? https://github.com/getzola/giallo
 indexmap = { version = "2", features = ["serde"] }
 itertools = "0.12"
 minifier = { version = "0.3.5", default-features = false }

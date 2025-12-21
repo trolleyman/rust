@@ -2404,7 +2404,7 @@ pub(crate) fn update_submodule<'a>(
     let actual_hash = recorded
         .split_whitespace()
         .nth(2)
-        .unwrap_or_else(|| panic!("unexpected output `{recorded}`"));
+        .unwrap_or_else(|| panic!("unexpected output `{recorded}` from git ls-tree (submodule {relative_path}; actual output: `{recorded}`)"));
 
     if actual_hash == checked_out_hash {
         // already checked out

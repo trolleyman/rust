@@ -52,7 +52,7 @@ use tracing::{debug, trace};
 use crate::clean::RenderedLink;
 use crate::doctest;
 use crate::doctest::GlobalTestOptions;
-use crate::html::escape::{Escape, EscapeBodyText};
+use crate::html::escape::EscapeBodyText;
 use crate::html::highlight;
 use crate::html::length_limit::HtmlWithLimit;
 use crate::html::render::small_url_encode;
@@ -249,25 +249,29 @@ impl<'a, I: Iterator<Item = Event<'a>>> Iterator for CodeBlocks<'_, 'a, I> {
                     let parse_result =
                         LangString::parse_without_check(lang, self.check_error_codes);
                     if !parse_result.rust {
+                        // return Some(Event::Html(
+                        //     format!(
+                        //         "<div class=\"example-wrap\">\
+                        //          <pre class=\"{lang_string}{whitespace}{added_classes}\">\
+                        //              <code>{text}</code>\
+                        //          </pre>\
+                        //      </div>",
+                        //         added_classes = added_classes.join(" "),
+                        //         text = Escape(original_text.trim_suffix('\n')),
+                        //     )
+                        //     .into(),
+                        // ));
                         let added_classes = parse_result.added_classes;
-                        let lang_string = if let Some(lang) = parse_result.unknown.first() {
-                            format!("language-{lang}")
-                        } else {
-                            String::new()
-                        };
-                        let whitespace = if added_classes.is_empty() { "" } else { " " };
-                        return Some(Event::Html(
-                            format!(
-                                "<div class=\"example-wrap\">\
-                                 <pre class=\"{lang_string}{whitespace}{added_classes}\">\
-                                     <code>{text}</code>\
-                                 </pre>\
-                             </div>",
-                                added_classes = added_classes.join(" "),
-                                text = Escape(original_text.trim_suffix('\n')),
+                        let lang = parse_result.unknown.first();
+                        let s = format!(
+                            "\n{}",
+                            highlight::render_non_rust_example_with_highlighting(
+                                &original_text,
+                                lang.map(|s| s.as_str()),
+                                &added_classes,
                             )
-                            .into(),
-                        ));
+                        );
+                        return Some(Event::Html(s.into()));
                     }
                     parse_result
                 }
